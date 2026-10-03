@@ -1,0 +1,541 @@
+// ================= Util =================
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const rp = (n) => new Intl.NumberFormat('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n || 0);
+const rupiah = (n) => 'Rp ' + rp(n);
+const pct = (n) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(n || 0) + '%';
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const BULAN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const tgl = (s) => { if (!s) return '-'; const [y, m, d] = s.split('-'); return `${+d}-${BULAN[+m - 1]}-${y.slice(2)}`; };
+const PALETTE = ['#0f6e56', '#e0912f', '#3b6fb6', '#c2453d', '#7a5bb5', '#2e9d9a', '#b8a12a', '#8c5a3c', '#d16ba5', '#5d7a65', '#4c4c8a', '#9aa35b'];
+const JENIS_OBLIGASI = ['Sukuk Ritel', 'Sukuk Tabungan', 'Obligasi Negara Ritel', 'Savings Bond Ritel', 'Obligasi Korporasi', 'Sukuk Korporasi'];
+
+const state = { me: null, view: 'dashboard', userId: null, master: {}, charts: [] };
+
+async function api(url, opt = {}) {
+  const res = await fetch(url, {
+    method: opt.method || 'GET',
+    headers: opt.body ? { 'Content-Type': 'application/json' } : {},
+    body: opt.body ? JSON.stringify(opt.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && url !== '/api/login') { showLogin(); throw new Error('Sesi berakhir'); }
+  if (!res.ok) throw new Error(data.error || 'Gagal memproses permintaan');
+  return data;
+}
+const withUser = (url) => (state.userId && state.me.role === 'admin' ? `${url}${url.includes('?') ? '&' : '?'}user_id=${state.userId}` : url);
+
+function toast(msg, err = false) {
+  const t = $('#toast');
+  t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(t._h); t._h = setTimeout(() => (t.className = 'toast'), 2600);
+}
+const isAdmin = () => state.me?.role === 'admin';
+
+// ================= Modal form =================
+// fields: [{name,label,type,options:[{value,label}],value,required,step,half}]
+function formModal(title, fields, onSubmit) {
+  const dlg = $('#modal');
+  $('#modalTitle').textContent = title;
+  $('#modalError').textContent = '';
+  let html = '', buf = [];
+  const input = (f) => {
+    const v = f.value ?? '';
+    let ctl;
+    if (f.type === 'select') {
+      ctl = `<select name="${f.name}" ${f.required ? 'required' : ''}>${f.options.map((o) =>
+        `<option value="${esc(o.value)}" ${String(o.value) === String(v) ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+    } else {
+      ctl = `<input name="${f.name}" type="${f.type || 'text'}" value="${esc(v)}" ${f.step ? `step="${f.step}"` : ''}
+             ${f.list ? `list="${f.name}-list"` : ''} ${f.required ? 'required' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}>`;
+      if (f.list) ctl += `<datalist id="${f.name}-list">${f.list.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`;
+    }
+    return `<label>${esc(f.label)}${ctl}</label>`;
+  };
+  fields.forEach((f) => {
+    if (f.half) { buf.push(input(f)); if (buf.length === 2) { html += `<div class="row2">${buf.join('')}</div>`; buf = []; } }
+    else { if (buf.length) { html += `<div class="row2">${buf.join('')}</div>`; buf = []; } html += input(f); }
+  });
+  if (buf.length) html += `<div class="row2">${buf.join('')}</div>`;
+  $('#modalBody').innerHTML = html;
+
+  const form = $('#modalForm');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    try { await onSubmit(data); dlg.close(); } catch (err) { $('#modalError').textContent = err.message; }
+  };
+  $('#modalCancel').onclick = () => dlg.close();
+  dlg.showModal();
+  return $('#modalBody');
+}
+
+async function confirmDelete(what, fn) {
+  if (!confirm(`Hapus ${what}?`)) return;
+  try { await fn(); toast('Data dihapus'); render(); } catch (e) { toast(e.message, true); }
+}
+
+// ================= Auth & navigasi =================
+function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  $('#loginError').textContent = '';
+  try {
+    state.me = await api('/api/login', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    e.target.reset();
+    start();
+  } catch (err) { $('#loginError').textContent = err.message; }
+};
+$('#btnLogout').onclick = async () => { await api('/api/logout', { method: 'POST' }); state.me = null; showLogin(); };
+$('#btnPassword').onclick = () => formModal('Ganti kata sandi', [
+  { name: 'lama', label: 'Kata sandi lama', type: 'password', required: true },
+  { name: 'baru', label: 'Kata sandi baru (min. 6 karakter)', type: 'password', required: true },
+], async (d) => { await api('/api/me/password', { method: 'POST', body: d }); toast('Kata sandi diperbarui'); });
+$('#btnMenu').onclick = () => $('.sidebar').classList.toggle('open');
+
+$$('#nav a').forEach((a) => a.onclick = () => { state.view = a.dataset.view; location.hash = state.view; $('.sidebar').classList.remove('open'); render(); });
+$('#userPick').onchange = (e) => { state.userId = Number(e.target.value); render(); };
+
+async function start() {
+  $('#login').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  $('#whoami').textContent = `${state.me.nama_lengkap || state.me.username} · ${state.me.role}`;
+  $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
+  state.userId = state.me.id;
+  if (isAdmin()) await loadUserPick();
+  const h = location.hash.slice(1);
+  if (h && $(`#nav a[data-view="${h}"]`)) state.view = h;
+  render();
+}
+async function loadUserPick() {
+  const users = await api('/api/users');
+  $('#userPick').innerHTML = users.map((u) => `<option value="${u.id}" ${u.id === state.userId ? 'selected' : ''}>${esc(u.nama_lengkap || u.username)} (${esc(u.username)})</option>`).join('');
+}
+async function loadMaster() {
+  const [jenis, lembaga, penyimpanan] = await Promise.all(['jenis', 'lembaga', 'penyimpanan'].map((t) => api('/api/master/' + t)));
+  state.master = { jenis, lembaga, penyimpanan };
+}
+
+const TITLES = {
+  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham',
+  jenis: 'Jenis Instrumen Keuangan', lembaga: 'Nama Instrumen Keuangan', penyimpanan: 'Instrumen Investasi / Penyimpanan', users: 'Manajemen Pengguna',
+};
+async function render() {
+  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === state.view));
+  $('#viewTitle').textContent = TITLES[state.view];
+  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham'].includes(state.view));
+  state.charts.forEach((c) => c.destroy()); state.charts = [];
+  const v = $('#view');
+  v.innerHTML = '<div class="empty">Memuat…</div>';
+  try {
+    await loadMaster();
+    await VIEWS[state.view](v);
+  } catch (e) { v.innerHTML = `<div class="card error">${esc(e.message)}</div>`; }
+}
+
+// ================= Chart helper =================
+function chart(canvas, type, labels, data, opts = {}) {
+  const isRound = type === 'pie' || type === 'doughnut';
+  const c = new Chart(canvas, {
+    type,
+    data: {
+      labels,
+      datasets: Array.isArray(data[0]?.data) ? data : [{ data, backgroundColor: PALETTE, borderColor: '#fff', borderWidth: isRound ? 2 : 0, borderRadius: isRound ? 0 : 4 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      indexAxis: opts.horizontal ? 'y' : 'x',
+      cutout: type === 'doughnut' ? '62%' : undefined,
+      plugins: {
+        legend: { display: !!(isRound || opts.legend), position: isRound ? 'right' : 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: { callbacks: { label: (ctx) => {
+          const v = isRound ? ctx.parsed : (opts.horizontal ? ctx.parsed.x : ctx.parsed.y);
+          if (isRound) { const sum = ctx.dataset.data.reduce((a, b) => a + b, 0); return ` ${ctx.label}: ${rupiah(v)} (${pct(v / sum * 100)})`; }
+          return ` ${ctx.dataset.label ? ctx.dataset.label + ': ' : ''}${rupiah(v)}`;
+        } } },
+      },
+      scales: isRound ? {} : {
+        [opts.horizontal ? 'x' : 'y']: { ticks: { callback: (v) => (v >= 1e6 ? rp(v / 1e6) + ' jt' : rp(v)) }, grid: { color: '#eef0eb' }, stacked: opts.stacked },
+        [opts.horizontal ? 'y' : 'x']: { grid: { display: false }, stacked: opts.stacked },
+      },
+    },
+  });
+  state.charts.push(c);
+  return c;
+}
+function emptyChart(el, msg = 'Belum ada data') { el.parentElement.innerHTML = `<div class="empty">${msg}</div>`; }
+
+function summaryTable(rows, total, label) {
+  if (!rows.length) return '<div class="empty">Belum ada data</div>';
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>${label}</th><th class="num">Nilai (Rp)</th><th class="num">%</th></tr></thead>
+    <tbody>${rows.map((r, i) => `<tr>
+      <td class="bar-cell"><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(r.label)}
+        <div class="bar"><span style="width:${(r.total / total * 100).toFixed(1)}%;background:${PALETTE[i % PALETTE.length]}"></span></div></td>
+      <td class="num">${rp(r.total)}</td><td class="num">${pct(r.total / total * 100)}</td></tr>`).join('')}</tbody>
+    <tfoot><tr><td>Total</td><td class="num">${rp(total)}</td><td class="num">100%</td></tr></tfoot>
+  </table></div>`;
+}
+
+// ================= Views =================
+const VIEWS = {};
+
+// ---------- Dashboard ----------
+VIEWS.dashboard = async (v) => {
+  const [d, porto] = await Promise.all([api(withUser('/api/dashboard')), api(withUser('/api/portofolio'))]);
+  const r = d.ringkas;
+  v.innerHTML = `
+  <div class="kpis">
+    <div class="card kpi main"><div class="label">Total Aset</div><div class="value">${rupiah(r.totalAset)}</div><div class="sub">Portofolio + obligasi aktif + saham</div></div>
+    <div class="card kpi"><div class="label">Portofolio (bank, e-wallet, dll.)</div><div class="value">${rupiah(r.totalPorto)}</div><div class="sub">${porto.length} pos</div></div>
+    <div class="card kpi"><div class="label">Obligasi aktif</div><div class="value">${rupiah(r.totalObl)}</div><div class="sub">${r.jumlahObl} seri · proyeksi ${rupiah(r.proyeksiObl)}</div></div>
+    <div class="card kpi"><div class="label">Saham (nilai pasar)</div><div class="value">${rupiah(r.totalSaham)}</div>
+      <div class="sub">${r.jumlahEmiten} emiten · <span class="${r.labaSaham < 0 ? 'neg' : 'pos'}">${r.labaSaham >= 0 ? '+' : ''}${rupiah(r.labaSaham)} (${pct(r.persenSaham)})</span></div></div>
+  </div>
+
+  <div class="section-title">Ringkasan portofolio</div>
+  <div class="grid-3">
+    <div class="card"><h2>Komposisi aset</h2><div class="chart-box"><canvas id="cKomposisi"></canvas></div></div>
+    <div class="card"><h2>Per jenis instrumen</h2><div class="chart-box"><canvas id="cJenis"></canvas></div></div>
+    <div class="card"><h2>Per nama instrumen</h2><div class="chart-box"><canvas id="cLembaga"></canvas></div></div>
+  </div>
+  <div class="grid-3">
+    <div class="card"><h2>Komposisi aset (termasuk obligasi & saham)</h2>${summaryTable(d.komposisi, r.totalAset, 'Instrumen')}</div>
+    <div class="card"><h2>Per jenis instrumen</h2>${summaryTable(d.perJenis, r.totalPorto, 'Jenis')}</div>
+    <div class="card"><h2>Per nama instrumen</h2>${summaryTable(d.perLembaga, r.totalPorto, 'Nama')}</div>
+  </div>
+
+  <div class="card"><h2>Detail portofolio<span class="spacer"></span><button class="btn sm" data-go="portofolio">Ubah data</button></h2>
+    ${porto.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Jenis Instrumen Keuangan</th><th>Nama Instrumen Keuangan</th><th>Instrumen Investasi / Penyimpanan</th><th class="num">Nilai (Rp)</th><th class="num">%</th></tr></thead>
+      <tbody>${porto.map((p) => `<tr><td>${esc(p.jenis)}</td><td>${esc(p.lembaga)}</td><td>${esc(p.penyimpanan)}</td>
+        <td class="num">${rp(p.nilai)}</td><td class="num">${pct(r.totalPorto ? p.nilai / r.totalPorto * 100 : 0)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3">Total</td><td class="num">${rp(r.totalPorto)}</td><td class="num">100%</td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data portofolio.</div>'}
+  </div>
+
+  <div class="section-title">Obligasi</div>
+  <div class="grid-2">
+    <div class="card"><h2>Saldo per jenis obligasi</h2><div class="chart-box"><canvas id="cOblJenis"></canvas></div></div>
+    <div class="card"><h2>Saldo & proyeksi keuntungan per seri</h2><div class="chart-box"><canvas id="cOblSeri"></canvas></div></div>
+  </div>
+  <div class="card"><h2>Ringkasan per jenis obligasi</h2>
+    ${d.oblPerJenis.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Jenis Obligasi</th><th class="num">Jumlah seri</th><th class="num">Saldo (Rp)</th><th class="num">Proyeksi keuntungan (Rp)</th><th class="num">%</th></tr></thead>
+      <tbody>${d.oblPerJenis.map((o, i) => `<tr><td><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(o.label)}</td>
+        <td class="num">${o.jumlah}</td><td class="num">${rp(o.total)}</td><td class="num">${rp(o.proyeksi)}</td><td class="num">${pct(o.total / r.totalObl * 100)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td>Total</td><td class="num">${r.jumlahObl}</td><td class="num">${rp(r.totalObl)}</td><td class="num">${rp(r.proyeksiObl)}</td><td class="num">100%</td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada obligasi aktif.</div>'}
+  </div>
+
+  <div class="section-title">Saham</div>
+  <div class="grid-2">
+    <div class="card"><h2>Alokasi per emiten (nilai pasar)</h2><div class="chart-box"><canvas id="cSahamAlok"></canvas></div></div>
+    <div class="card"><h2>Modal vs nilai pasar per emiten</h2><div class="chart-box"><canvas id="cSahamBanding"></canvas></div></div>
+  </div>
+  <div class="card"><h2>Ringkasan saham<span class="spacer"></span><button class="btn sm" data-go="saham">Ubah data</button></h2>
+    ${d.sahamPerEmiten.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Kode</th><th>Emiten</th><th class="num">Lot</th><th class="num">Modal (Rp)</th><th class="num">Nilai pasar (Rp)</th><th class="num">Untung/Rugi (Rp)</th><th class="num">Return</th><th class="num">Alokasi</th></tr></thead>
+      <tbody>${d.sahamPerEmiten.map((s, i) => `<tr><td><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span><b>${esc(s.label)}</b></td><td>${esc(s.emiten)}</td>
+        <td class="num">${rp(s.lot)}</td><td class="num">${rp(s.modal)}</td><td class="num">${rp(s.total)}</td>
+        <td class="num ${s.laba < 0 ? 'neg' : 'pos'}">${s.laba >= 0 ? '+' : ''}${rp(s.laba)}</td><td class="num ${s.laba < 0 ? 'neg' : 'pos'}">${pct(s.persen)}</td>
+        <td class="num">${pct(s.total / r.totalSaham * 100)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3">Total</td><td class="num">${rp(r.modalSaham)}</td><td class="num">${rp(r.totalSaham)}</td>
+        <td class="num ${r.labaSaham < 0 ? 'neg' : 'pos'}">${r.labaSaham >= 0 ? '+' : ''}${rp(r.labaSaham)}</td><td class="num">${pct(r.persenSaham)}</td><td class="num">100%</td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data saham.</div>'}
+  </div>`;
+
+  $$('[data-go]', v).forEach((b) => b.onclick = () => { state.view = b.dataset.go; render(); });
+
+  const draw = (id, type, rows, opts) => {
+    const el = $('#' + id);
+    if (!rows.length) return emptyChart(el);
+    chart(el, type, rows.map((x) => (x.label.length > 22 ? x.label.slice(0, 21) + '…' : x.label)), rows.map((x) => x.total), opts);
+  };
+  draw('cKomposisi', 'doughnut', d.komposisi);
+  draw('cJenis', 'pie', d.perJenis);
+  draw('cLembaga', 'bar', d.perLembaga.slice(0, 10), { horizontal: true });
+  draw('cOblJenis', 'doughnut', d.oblPerJenis);
+
+  const aktif = d.obligasi.filter((o) => o.status === 'Aktif');
+  if (!aktif.length) emptyChart($('#cOblSeri'));
+  else chart($('#cOblSeri'), 'bar', aktif.map((o) => o.kode), [
+    { label: 'Saldo awal', data: aktif.map((o) => o.saldo_awal), backgroundColor: PALETTE[0], borderRadius: 4 },
+    { label: 'Proyeksi keuntungan', data: aktif.map((o) => o.proyeksi), backgroundColor: PALETTE[1], borderRadius: 4 },
+  ], { stacked: true, legend: true });
+
+  draw('cSahamAlok', 'doughnut', d.sahamPerEmiten);
+  if (!d.sahamPerEmiten.length) emptyChart($('#cSahamBanding'));
+  else chart($('#cSahamBanding'), 'bar', d.sahamPerEmiten.map((s) => s.label), [
+    { label: 'Modal', data: d.sahamPerEmiten.map((s) => s.modal), backgroundColor: '#b9c4bd', borderRadius: 4 },
+    { label: 'Nilai pasar', data: d.sahamPerEmiten.map((s) => s.total), backgroundColor: PALETTE[0], borderRadius: 4 },
+  ], { legend: true });
+};
+
+// ---------- Saham ----------
+VIEWS.saham = async (v) => {
+  const rows = await api(withUser('/api/saham'));
+  const tot = (k) => rows.reduce((a, s) => a + s[k], 0);
+  const laba = tot('nilai') - tot('modal');
+  const cls = (n) => (n < 0 ? 'neg' : 'pos');
+  const plus = (n) => (n >= 0 ? '+' : '');
+
+  v.innerHTML = `<div class="card">
+    <h2>Daftar saham<span class="spacer"></span><button class="btn primary sm" id="addSaham">+ Tambah saham</button></h2>
+    <p class="hint">1 lot = 100 lembar. Modal = lot × 100 × harga beli; nilai pasar = lot × 100 × harga terkini. Ketik harga terkini langsung di tabel untuk memperbarui nilai (tersimpan otomatis).</p>
+    ${rows.length ? `<div class="table-wrap"><table class="compact">
+      <thead><tr><th>Kode / Emiten</th><th>Sekuritas</th><th>Tanggal Beli</th><th class="num">Lot</th><th class="num">Lembar</th>
+        <th class="num">Harga Beli</th><th class="num" style="width:120px">Harga Terkini</th><th class="num">Modal</th><th class="num">Nilai Pasar</th>
+        <th class="num">Untung/Rugi</th><th class="num">%</th><th></th></tr></thead>
+      <tbody>${rows.map((s) => `<tr>
+        <td><b>${esc(s.kode)}</b><div class="hint">${esc(s.emiten.replace(/\s*Tbk$/, ''))}</div></td><td>${esc(s.sekuritas || '-')}</td><td>${tgl(s.tanggal_beli)}</td>
+        <td class="num">${rp(s.lot)}</td><td class="num">${rp(s.lembar)}</td><td class="num">${rp(s.harga_beli)}</td>
+        <td class="num"><input class="harga-input" data-harga="${s.id}" inputmode="decimal" value="${s.harga_terkini > 0 ? rp(s.harga_terkini) : ''}" placeholder="${rp(s.harga_beli)}"></td>
+        <td class="num">${rp(s.modal)}</td><td class="num">${rp(s.nilai)}</td>
+        <td class="num ${cls(s.laba)}">${plus(s.laba)}${rp(s.laba)}</td><td class="num ${cls(s.laba)}">${pct(s.persen)}</td>
+        <td class="actions"><button class="btn sm" data-edit="${s.id}">Ubah</button><button class="btn sm danger" data-del="${s.id}">Hapus</button></td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3">Total (${rows.length} transaksi)</td><td class="num">${rp(tot('lot'))}</td><td class="num">${rp(tot('lembar'))}</td><td colspan="2"></td>
+        <td class="num">${rp(tot('modal'))}</td><td class="num">${rp(tot('nilai'))}</td>
+        <td class="num ${cls(laba)}">${plus(laba)}${rp(laba)}</td><td class="num ${cls(laba)}">${pct(tot('modal') ? laba / tot('modal') * 100 : 0)}</td><td></td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data saham.</div>'}
+  </div>`;
+
+  const parseNum = (s) => Number(String(s).replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
+  $$('[data-harga]', v).forEach((inp) => inp.onchange = async () => {
+    try { await api(`/api/saham/${inp.dataset.harga}/harga`, { method: 'PATCH', body: { harga_terkini: parseNum(inp.value) } }); toast('Harga diperbarui'); render(); }
+    catch (e) { toast(e.message, true); }
+  });
+
+  const emiten = state.master.lembaga.filter((l) => l.jenis === 'Saham');
+  const sekuritas = state.master.lembaga.filter((l) => l.jenis === 'Platform Investasi');
+  const form = (s = {}) => formModal(s.id ? 'Ubah saham' : 'Tambah saham', [
+    { name: 'emiten_id', label: 'Emiten', type: 'select', value: s.emiten_id, required: true,
+      options: [{ value: '', label: '— pilih emiten —' }, ...emiten.map((l) => ({ value: l.id, label: `${l.singkatan} — ${l.nama}` }))] },
+    { name: 'sekuritas_id', label: 'Sekuritas / aplikasi (opsional)', type: 'select', value: s.sekuritas_id,
+      options: [{ value: '', label: '—' }, ...sekuritas.map((l) => ({ value: l.id, label: l.nama }))] },
+    { name: 'tanggal_beli', label: 'Tanggal beli', type: 'date', value: s.tanggal_beli, half: true },
+    { name: 'lot', label: 'Jumlah lot', type: 'number', step: '1', value: s.lot, required: true, half: true },
+    { name: 'harga_beli', label: 'Harga beli rata-rata (Rp/lembar)', type: 'number', step: '0.01', value: s.harga_beli, required: true, half: true },
+    { name: 'harga_terkini', label: 'Harga terkini (Rp/lembar)', type: 'number', step: '0.01', value: s.harga_terkini, half: true },
+    { name: 'catatan', label: 'Catatan', value: s.catatan },
+  ], async (d) => {
+    if (s.id) await api('/api/saham/' + s.id, { method: 'PUT', body: d });
+    else await api(withUser('/api/saham'), { method: 'POST', body: d });
+    toast('Tersimpan'); render();
+  });
+
+  $('#addSaham').onclick = () => form();
+  $$('[data-edit]', v).forEach((b) => b.onclick = () => form(rows.find((s) => s.id === Number(b.dataset.edit))));
+  $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('saham ini', () => api('/api/saham/' + b.dataset.del, { method: 'DELETE' })));
+};
+
+// ---------- Input portofolio (tabel seperti gambar 1) ----------
+VIEWS.portofolio = async (v) => {
+  const rows = await api(withUser('/api/portofolio'));
+  const { jenis, lembaga, penyimpanan } = state.master;
+  const opt = (list, sel, labelFn = (x) => x.nama) => `<option value="">— pilih —</option>` +
+    list.map((x) => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${esc(labelFn(x))}</option>`).join('');
+  const lembagaOpt = (jenisId, sel) => opt(lembaga.filter((l) => l.jenis_id === Number(jenisId)), sel,
+    (l) => (l.singkatan && l.singkatan !== l.nama ? `${l.nama} (${l.singkatan})` : l.nama));
+
+  const rowHtml = (p = {}) => `<tr data-id="${p.id || ''}">
+    <td><select class="f-jenis">${opt(jenis.filter((j) => j.nama !== 'Saham' || j.id === p.jenis_id), p.jenis_id)}</select></td>
+    <td><select class="f-lembaga">${p.jenis_id ? lembagaOpt(p.jenis_id, p.lembaga_id) : '<option value="">— pilih jenis dulu —</option>'}</select></td>
+    <td><select class="f-simpan">${opt(penyimpanan, p.penyimpanan_id)}</select></td>
+    <td><input class="nilai f-nilai" inputmode="decimal" value="${p.id ? rp(p.nilai) : ''}" placeholder="0"></td>
+    <td><input class="f-catatan" value="${esc(p.catatan || '')}" placeholder="Catatan"></td>
+    <td class="actions"><button class="btn sm primary b-save" ${p.id ? 'hidden' : ''}>Simpan</button><button class="btn sm danger b-del">Hapus</button></td>
+  </tr>`;
+
+  v.innerHTML = `<div class="card">
+    <h2>Aset per instrumen<span class="spacer"></span><button class="btn primary sm" id="addRow">+ Tambah baris</button></h2>
+    <p class="hint">Isi seperti spreadsheet: pilih jenis → nama → instrumen penyimpanan, lalu ketik nilainya. Baris yang diubah ditandai kuning dan tersimpan otomatis saat Anda pindah kolom. Obligasi dan saham dicatat di menu <b>Obligasi</b> dan <b>Saham</b> agar tidak terhitung dua kali.</p>
+    <div class="table-wrap"><table class="sheet">
+      <thead><tr><th style="width:17%">Jenis Instrumen Keuangan</th><th style="width:25%">Nama Instrumen Keuangan</th><th style="width:19%">Instrumen Investasi / Penyimpanan</th><th style="width:15%" class="num">Nilai (Rp)</th><th>Catatan</th><th></th></tr></thead>
+      <tbody id="sheetBody">${rows.map(rowHtml).join('')}</tbody>
+      <tfoot><tr><td colspan="3">Total</td><td class="num" id="sheetTotal"></td><td colspan="2"></td></tr></tfoot>
+    </table></div>
+  </div>`;
+
+  const body = $('#sheetBody');
+  const parseNum = (s) => Number(String(s).replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
+  const updateTotal = () => { $('#sheetTotal').textContent = rp($$('.f-nilai', body).reduce((a, i) => a + parseNum(i.value), 0)); };
+  updateTotal();
+
+  async function save(tr) {
+    const d = {
+      jenis_id: $('.f-jenis', tr).value, lembaga_id: $('.f-lembaga', tr).value, penyimpanan_id: $('.f-simpan', tr).value,
+      nilai: parseNum($('.f-nilai', tr).value), catatan: $('.f-catatan', tr).value,
+    };
+    if (!d.jenis_id || !d.lembaga_id || !d.penyimpanan_id) { if (tr.dataset.id) toast('Lengkapi jenis, nama, dan instrumen', true); return; }
+    try {
+      if (tr.dataset.id) await api('/api/portofolio/' + tr.dataset.id, { method: 'PUT', body: d });
+      else {
+        const res = await api(withUser('/api/portofolio'), { method: 'POST', body: d });
+        tr.dataset.id = res.id; $('.b-save', tr).hidden = true;
+      }
+      tr.classList.remove('dirty');
+      toast('Tersimpan');
+    } catch (e) { toast(e.message, true); }
+  }
+
+  body.addEventListener('change', (e) => {
+    const tr = e.target.closest('tr');
+    if (e.target.classList.contains('f-jenis')) $('.f-lembaga', tr).innerHTML = lembagaOpt(e.target.value);
+    tr.classList.add('dirty');
+    if (tr.dataset.id) save(tr);
+  });
+  body.addEventListener('input', (e) => { if (e.target.classList.contains('f-nilai')) updateTotal(); e.target.closest('tr').classList.add('dirty'); });
+  body.addEventListener('focusout', (e) => { if (e.target.classList.contains('f-nilai') && e.target.value) e.target.value = rp(parseNum(e.target.value)); });
+  body.addEventListener('click', (e) => {
+    const tr = e.target.closest('tr');
+    if (e.target.classList.contains('b-save')) save(tr);
+    if (e.target.classList.contains('b-del')) {
+      if (!tr.dataset.id) { tr.remove(); updateTotal(); return; }
+      confirmDelete('baris ini', () => api('/api/portofolio/' + tr.dataset.id, { method: 'DELETE' }));
+    }
+  });
+  $('#addRow').onclick = () => { body.insertAdjacentHTML('beforeend', rowHtml()); $('.f-jenis', body.lastElementChild).focus(); };
+  if (!rows.length) $('#addRow').click();
+};
+
+// ---------- Obligasi (tabel seperti gambar 2) ----------
+VIEWS.obligasi = async (v) => {
+  const rows = await api(withUser('/api/obligasi'));
+  const tampil = (state.oblFilter || 'semua');
+  const list = rows.filter((o) => tampil === 'semua' || o.status === tampil);
+  const tot = (k) => list.reduce((a, o) => a + o[k], 0);
+
+  v.innerHTML = `<div class="card">
+    <h2>Daftar obligasi<span class="spacer"></span>
+      <select id="oblFilter" style="width:auto;margin:0"><option value="semua">Semua</option><option value="Aktif">Aktif</option><option value="Jatuh tempo">Jatuh tempo</option></select>
+      <button class="btn primary sm" id="addObl">+ Tambah obligasi</button></h2>
+    <p class="hint">Total proyeksi keuntungan = saldo awal × keuntungan per tahun × tahun. Tahun diambil dari tenor pada kode (mis. SR019-<b>T5</b> → 5 tahun).</p>
+    ${list.length ? `<div class="table-wrap"><table class="compact">
+      <thead><tr><th>Jenis Obligasi</th><th>Kode Obligasi</th><th>Cair Pertama</th><th>Cair Terakhir</th><th class="num">Saldo Awal</th>
+        <th class="num">Keuntungan per tahun (%)</th><th class="num">Total Proyeksi Keuntungan</th><th class="num">Tahun</th><th>Status</th><th></th></tr></thead>
+      <tbody>${list.map((o) => `<tr>
+        <td>${esc(o.jenis_obligasi)}</td><td><b>${esc(o.kode)}</b></td><td>${tgl(o.cair_pertama)}</td><td>${tgl(o.cair_terakhir)}</td>
+        <td class="num">${rp(o.saldo_awal)}</td><td class="num">${rp(o.kupon)}</td><td class="num">${rp(o.proyeksi)}</td><td class="num">${o.tahun}</td>
+        <td><span class="badge ${o.status === 'Aktif' ? '' : 'warn'}">${o.status}</span></td>
+        <td class="actions"><button class="btn sm" data-edit="${o.id}">Ubah</button><button class="btn sm danger" data-del="${o.id}">Hapus</button></td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="4">Total (${list.length} seri)</td><td class="num">${rp(tot('saldo_awal'))}</td><td></td><td class="num">${rp(tot('proyeksi'))}</td><td colspan="3"></td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data obligasi.</div>'}
+  </div>`;
+
+  $('#oblFilter').value = tampil;
+  $('#oblFilter').onchange = (e) => { state.oblFilter = e.target.value; render(); };
+
+  const tempat = state.master.lembaga.filter((l) => ['Bank', 'Platform Investasi'].includes(l.jenis));
+  const form = (o = {}) => formModal(o.id ? 'Ubah obligasi' : 'Tambah obligasi', [
+    { name: 'jenis_obligasi', label: 'Jenis obligasi', value: o.jenis_obligasi, list: JENIS_OBLIGASI, required: true, half: true },
+    { name: 'kode', label: 'Kode obligasi', value: o.kode, placeholder: 'SR023-T3', required: true, half: true },
+    { name: 'cair_pertama', label: 'Cair pertama', type: 'date', value: o.cair_pertama, required: true, half: true },
+    { name: 'cair_terakhir', label: 'Cair terakhir (jatuh tempo)', type: 'date', value: o.cair_terakhir, required: true, half: true },
+    { name: 'saldo_awal', label: 'Saldo awal (Rp)', type: 'number', step: '1', value: o.saldo_awal, required: true, half: true },
+    { name: 'kupon', label: 'Keuntungan per tahun (%)', type: 'number', step: '0.01', value: o.kupon, required: true, half: true },
+    { name: 'lembaga_id', label: 'Dibeli melalui (opsional)', type: 'select', value: o.lembaga_id,
+      options: [{ value: '', label: '—' }, ...tempat.map((l) => ({ value: l.id, label: `${l.nama} · ${l.jenis}` }))] },
+    { name: 'catatan', label: 'Catatan', value: o.catatan },
+  ], async (d) => {
+    if (o.id) await api('/api/obligasi/' + o.id, { method: 'PUT', body: d });
+    else await api(withUser('/api/obligasi'), { method: 'POST', body: d });
+    toast('Tersimpan'); render();
+  });
+
+  $('#addObl').onclick = () => form();
+  $$('[data-edit]', v).forEach((b) => b.onclick = () => form(rows.find((o) => o.id === Number(b.dataset.edit))));
+  $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('obligasi ini', () => api('/api/obligasi/' + b.dataset.del, { method: 'DELETE' })));
+};
+
+// ---------- Tabel master (generik) ----------
+function masterView(t, cols, fields, extra = {}) {
+  return async (v) => {
+    let rows = state.master[t];
+    const admin = isAdmin();
+    const filter = extra.filter ? (state.filters?.[t] || '') : '';
+    const q = (state.search?.[t] || '').toLowerCase();
+    if (filter) rows = rows.filter((r) => String(r.jenis_id) === filter);
+    if (q) rows = rows.filter((r) => cols.some((c) => String(r[c.key] ?? '').toLowerCase().includes(q)));
+
+    v.innerHTML = `<div class="card">
+      <h2>${TITLES[t]} <span class="badge">${rows.length}</span><span class="spacer"></span>
+        ${admin ? '<button class="btn primary sm" id="addM">+ Tambah</button>' : ''}</h2>
+      <div class="toolbar" style="margin-bottom:12px">
+        ${extra.filter ? `<select id="fJenis"><option value="">Semua jenis</option>${state.master.jenis.map((j) => `<option value="${j.id}" ${String(j.id) === filter ? 'selected' : ''}>${esc(j.nama)}</option>`).join('')}</select>` : ''}
+        <input id="fCari" placeholder="Cari…" value="${esc(state.search?.[t] || '')}" style="max-width:240px">
+        ${admin ? '' : '<span class="hint">Hanya admin yang dapat mengubah tabel master.</span>'}
+      </div>
+      ${rows.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>#</th>${cols.map((c) => `<th>${c.label}</th>`).join('')}${admin ? '<th></th>' : ''}</tr></thead>
+        <tbody>${rows.map((r, i) => `<tr><td class="muted">${i + 1}</td>${cols.map((c) => `<td>${esc(r[c.key])}</td>`).join('')}
+          ${admin ? `<td class="actions"><button class="btn sm" data-edit="${r.id}">Ubah</button><button class="btn sm danger" data-del="${r.id}">Hapus</button></td>` : ''}</tr>`).join('')}</tbody>
+      </table></div>` : '<div class="empty">Tidak ada data.</div>'}
+    </div>`;
+
+    $('#fCari').oninput = (e) => {
+      state.search = { ...state.search, [t]: e.target.value };
+      clearTimeout(state._s); state._s = setTimeout(() => { render().then(() => { const el = $('#fCari'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }); }, 250);
+    };
+    if (extra.filter) $('#fJenis').onchange = (e) => { state.filters = { ...state.filters, [t]: e.target.value }; render(); };
+    if (!admin) return;
+
+    const form = (r = {}) => formModal(r.id ? 'Ubah data' : 'Tambah data', fields(r), async (d) => {
+      if (r.id) await api(`/api/master/${t}/${r.id}`, { method: 'PUT', body: d });
+      else await api(`/api/master/${t}`, { method: 'POST', body: d });
+      toast('Tersimpan'); render();
+    });
+    $('#addM').onclick = () => form(extra.filter && filter ? { jenis_id: Number(filter) } : {});
+    $$('[data-edit]', v).forEach((b) => b.onclick = () => form(state.master[t].find((r) => r.id === Number(b.dataset.edit))));
+    $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('data ini', () => api(`/api/master/${t}/${b.dataset.del}`, { method: 'DELETE' })));
+  };
+}
+
+VIEWS.jenis = masterView('jenis',
+  [{ key: 'nama', label: 'Jenis Instrumen Keuangan' }, { key: 'keterangan', label: 'Keterangan' }],
+  (r) => [{ name: 'nama', label: 'Nama jenis', value: r.nama, required: true }, { name: 'keterangan', label: 'Keterangan', value: r.keterangan }]);
+
+VIEWS.lembaga = masterView('lembaga',
+  [{ key: 'jenis', label: 'Jenis' }, { key: 'nama', label: 'Nama Instrumen Keuangan' }, { key: 'singkatan', label: 'Singkatan / Kode' }],
+  (r) => [
+    { name: 'jenis_id', label: 'Jenis instrumen', type: 'select', value: r.jenis_id, required: true, options: state.master.jenis.map((j) => ({ value: j.id, label: j.nama })) },
+    { name: 'nama', label: 'Nama (bank, e-wallet, emiten saham, KUE, dll.)', value: r.nama, required: true },
+    { name: 'singkatan', label: 'Singkatan / kode saham', value: r.singkatan, placeholder: 'mis. BCA, BBCA' },
+  ], { filter: true });
+
+VIEWS.penyimpanan = masterView('penyimpanan',
+  [{ key: 'nama', label: 'Instrumen Investasi / Penyimpanan' }, { key: 'keterangan', label: 'Keterangan' }],
+  (r) => [{ name: 'nama', label: 'Nama instrumen', value: r.nama, required: true }, { name: 'keterangan', label: 'Keterangan', value: r.keterangan }]);
+
+// ---------- Pengguna ----------
+VIEWS.users = async (v) => {
+  const users = await api('/api/users');
+  v.innerHTML = `<div class="card">
+    <h2>Pengguna <span class="badge">${users.length}</span><span class="spacer"></span><button class="btn primary sm" id="addU">+ Tambah pengguna</button></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Nama pengguna</th><th>Nama lengkap</th><th>Peran</th><th>Dibuat</th><th></th></tr></thead>
+      <tbody>${users.map((u) => `<tr><td><b>${esc(u.username)}</b></td><td>${esc(u.nama_lengkap)}</td>
+        <td><span class="badge ${u.role === 'admin' ? 'warn' : ''}">${u.role}</span></td><td class="muted">${esc(u.created_at.slice(0, 10))}</td>
+        <td class="actions"><button class="btn sm" data-edit="${u.id}">Ubah</button>${u.id !== state.me.id ? `<button class="btn sm danger" data-del="${u.id}">Hapus</button>` : ''}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="hint">Admin dapat mengelola tabel master dan melihat data semua pengguna. Pengguna biasa hanya mengelola datanya sendiri.</p>
+  </div>`;
+
+  const form = (u = {}) => formModal(u.id ? 'Ubah pengguna' : 'Tambah pengguna', [
+    { name: 'username', label: 'Nama pengguna', value: u.username, required: true, half: true },
+    { name: 'nama_lengkap', label: 'Nama lengkap', value: u.nama_lengkap, half: true },
+    { name: 'password', label: u.id ? 'Kata sandi baru (kosongkan jika tidak diubah)' : 'Kata sandi (min. 6 karakter)', type: 'password', required: !u.id },
+    { name: 'role', label: 'Peran', type: 'select', value: u.role || 'user', options: [{ value: 'user', label: 'User' }, { value: 'admin', label: 'Admin' }] },
+  ], async (d) => {
+    if (u.id) await api('/api/users/' + u.id, { method: 'PUT', body: d });
+    else await api('/api/users', { method: 'POST', body: d });
+    toast('Tersimpan'); await loadUserPick(); render();
+  });
+  $('#addU').onclick = () => form();
+  $$('[data-edit]', v).forEach((b) => b.onclick = () => form(users.find((u) => u.id === Number(b.dataset.edit))));
+  $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('pengguna ini beserta seluruh datanya', async () => { await api('/api/users/' + b.dataset.del, { method: 'DELETE' }); await loadUserPick(); }));
+};
+
+// ================= Mulai =================
+api('/api/me').then((me) => { state.me = me; start(); }).catch(() => showLogin());
