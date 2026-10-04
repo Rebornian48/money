@@ -425,6 +425,45 @@ app.delete('/api/gaji/:id', requireAuth, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- Pengeluaran Bulanan ----------
+const KELUAR_SQL = `SELECT * FROM pengeluaran WHERE user_id = ? ORDER BY kategori, nama`;
+const KELUAR_FIELDS = ['kategori', 'nama', 'jumlah', 'catatan'];
+
+function validKeluar(b) {
+  const v = { kategori: str(b.kategori), nama: str(b.nama), jumlah: num(b.jumlah), catatan: str(b.catatan) };
+  if (!v.kategori) return { error: 'Kategori wajib diisi.' };
+  if (!v.nama) return { error: 'Nama pengeluaran wajib diisi.' };
+  if (!(v.jumlah > 0)) return { error: 'Jumlah harus lebih dari 0.' };
+  return v;
+}
+function ownedKeluar(req, res) {
+  const row = db.prepare('SELECT * FROM pengeluaran WHERE id = ?').get(Number(req.params.id));
+  if (!row || !canTouch(req, row.user_id)) { res.status(404).json({ error: 'Data tidak ditemukan.' }); return null; }
+  return row;
+}
+
+app.get('/api/pengeluaran', requireAuth, (req, res) => res.json(db.prepare(KELUAR_SQL).all(targetUser(req))));
+app.post('/api/pengeluaran', requireAuth, wrap((req, res) => {
+  const v = validKeluar(req.body);
+  if (v.error) return res.status(400).json(v);
+  const info = db.prepare(`INSERT INTO pengeluaran (user_id, ${KELUAR_FIELDS.join(',')}) VALUES (?,?,?,?,?)`)
+    .run(targetUser(req), ...KELUAR_FIELDS.map((f) => v[f]));
+  res.json({ id: info.lastInsertRowid });
+}));
+app.put('/api/pengeluaran/:id', requireAuth, wrap((req, res) => {
+  if (!ownedKeluar(req, res)) return;
+  const v = validKeluar(req.body);
+  if (v.error) return res.status(400).json(v);
+  db.prepare(`UPDATE pengeluaran SET ${KELUAR_FIELDS.map((f) => `${f}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(...KELUAR_FIELDS.map((f) => v[f]), Number(req.params.id));
+  res.json({ ok: true });
+}));
+app.delete('/api/pengeluaran/:id', requireAuth, wrap((req, res) => {
+  if (!ownedKeluar(req, res)) return;
+  db.prepare('DELETE FROM pengeluaran WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+}));
+
 // ---------- Dashboard ----------
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const uid = targetUser(req);

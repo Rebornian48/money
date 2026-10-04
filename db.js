@@ -108,6 +108,16 @@ CREATE TABLE IF NOT EXISTS riwayat_gaji (
   tunjangan_jabatan REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS pengeluaran (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kategori TEXT NOT NULL,
+  nama TEXT NOT NULL,
+  jumlah REAL NOT NULL DEFAULT 0,
+  catatan TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // ---------- Data awal ----------

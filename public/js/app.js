@@ -118,13 +118,13 @@ async function loadMaster() {
 }
 
 const TITLES = {
-  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham', crypto: 'Crypto', gaji: 'Gaji PNS',
+  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham', crypto: 'Crypto', gaji: 'Gaji PNS', aruskas: 'Arus Kas',
   jenis: 'Jenis Instrumen Keuangan', lembaga: 'Nama Instrumen Keuangan', penyimpanan: 'Instrumen Investasi / Penyimpanan', users: 'Manajemen Pengguna',
 };
 async function render() {
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === state.view));
   $('#viewTitle').textContent = TITLES[state.view];
-  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham', 'crypto', 'gaji'].includes(state.view));
+  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham', 'crypto', 'gaji', 'aruskas'].includes(state.view));
   state.charts.forEach((c) => c.destroy()); state.charts = [];
   const v = $('#view');
   v.innerHTML = '<div class="empty">Memuat…</div>';
@@ -498,6 +498,136 @@ VIEWS.gaji = async (v) => {
   $('#addGaji').onclick = () => form();
   $$('[data-edit]', v).forEach((b) => b.onclick = () => form(rows.find((r) => r.id === Number(b.dataset.edit))));
   $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('riwayat gaji ini', () => api('/api/gaji/' + b.dataset.del, { method: 'DELETE' })));
+};
+
+// ---------- Arus Kas (estimasi pendapatan & pengeluaran bulanan) ----------
+const KATEGORI_PENGELUARAN = [
+  'Tempat Tinggal', 'Makanan & Minuman', 'Transportasi', 'Tagihan & Utilitas',
+  'Cicilan & Pinjaman', 'Asuransi', 'Pendidikan', 'Kesehatan',
+  'Hiburan & Gaya Hidup', 'Tabungan & Investasi', 'Lain-lain',
+];
+
+VIEWS.aruskas = async (v) => {
+  const [gajiRows, oblRows, pengeluaranRows] = await Promise.all([
+    api(withUser('/api/gaji')),
+    api(withUser('/api/obligasi')),
+    api(withUser('/api/pengeluaran')),
+  ]);
+
+  const latest = gajiRows.length ? gajiRows[gajiRows.length - 1] : null;
+  let gajiBruto = 0, gajiNetto = 0, gajiPokok = 0, tukin = 0, tunjab = 0, potGaji = 0;
+  if (latest) {
+    gajiPokok = latest.gaji_pokok;
+    tukin = latest.tunjangan_kinerja;
+    tunjab = latest.tunjangan_jabatan;
+    gajiBruto = gajiPokok + tukin + tunjab;
+    potGaji = Math.round(gajiPokok * 0.01) + Math.round(gajiPokok * 0.08) + Math.round(gajiPokok * 0.025);
+    gajiNetto = gajiBruto - potGaji;
+  }
+
+  const aktifObl = oblRows.filter((o) => o.status === 'Aktif');
+  const kuponBulanan = aktifObl.reduce((a, o) => a + (o.saldo_awal * (o.kupon / 100) / 12), 0);
+  const kuponTahunan = aktifObl.reduce((a, o) => a + (o.saldo_awal * (o.kupon / 100)), 0);
+
+  const totalPendapatanBulanan = gajiNetto + kuponBulanan;
+  const totalPendapatanTahunan = (gajiNetto * 12) + kuponTahunan;
+
+  const totalPengeluaran = pengeluaranRows.reduce((a, r) => a + r.jumlah, 0);
+  const sisa = totalPendapatanBulanan - totalPengeluaran;
+  const clsSisa = sisa >= 0 ? 'pos' : 'neg';
+
+  const perKategori = Object.values(pengeluaranRows.reduce((acc, r) => {
+    acc[r.kategori] ??= { kategori: r.kategori, total: 0 };
+    acc[r.kategori].total += r.jumlah;
+    return acc;
+  }, {})).sort((a, b) => b.total - a.total);
+
+  const baris = (label, val, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${rupiah(val)}</td></tr>`;
+
+  v.innerHTML = `
+  <div class="grid-2">
+    <div class="card">
+      <h2>Estimasi Pendapatan Bulanan</h2>
+      <div class="table-wrap"><table class="compact slip-table" style="max-width:100%">
+        <thead><tr><th colspan="2" class="section-head pos">GAJI PNS (NETTO)</th></tr></thead>
+        <tbody>
+          ${latest ? `${baris('Gaji Pokok', gajiPokok)}
+          ${baris('Tunjangan Kinerja', tukin)}
+          ${baris('Tunjangan Jabatan', tunjab)}
+          ${baris('Potongan (BPJS + Taspen + Tapera)', -potGaji)}
+          <tr class="total"><td><b>Gaji Bersih</b></td><td class="num"><b>${rupiah(gajiNetto)}</b></td></tr>`
+          : '<tr><td colspan="2" class="muted">Belum ada data gaji. Isi di menu Gaji PNS.</td></tr>'}
+        </tbody>
+        <thead><tr><th colspan="2" class="section-head pos">KUPON OBLIGASI</th></tr></thead>
+        <tbody>
+          ${aktifObl.length ? aktifObl.map((o) =>
+            baris(`${esc(o.kode)} (${pct(o.kupon)})`, o.saldo_awal * (o.kupon / 100) / 12)
+          ).join('') + `<tr class="total"><td><b>Total Kupon / Bulan</b></td><td class="num"><b>${rupiah(kuponBulanan)}</b></td></tr>`
+          : '<tr><td colspan="2" class="muted">Belum ada obligasi aktif.</td></tr>'}
+        </tbody>
+        <tfoot>
+          <tr class="netto"><td><b>TOTAL PENDAPATAN / BULAN</b></td><td class="num"><b>${rupiah(totalPendapatanBulanan)}</b></td></tr>
+        </tfoot>
+      </table></div>
+    </div>
+    <div class="card">
+      <h2>Estimasi Pendapatan Tahunan</h2>
+      <div class="table-wrap"><table class="compact slip-table" style="max-width:100%">
+        <tbody>
+          ${baris('Gaji Bersih × 12 bulan', gajiNetto * 12)}
+          ${baris('Kupon Obligasi (total/tahun)', kuponTahunan)}
+        </tbody>
+        <tfoot>
+          <tr class="netto"><td><b>TOTAL PENDAPATAN / TAHUN</b></td><td class="num"><b>${rupiah(totalPendapatanTahunan)}</b></td></tr>
+        </tfoot>
+      </table></div>
+      <h2 style="margin-top:20px">Ringkasan Bulanan</h2>
+      <div class="table-wrap"><table class="compact slip-table" style="max-width:100%">
+        <tbody>
+          ${baris('Total Pendapatan', totalPendapatanBulanan)}
+          ${baris('Total Pengeluaran', totalPengeluaran)}
+        </tbody>
+        <tfoot>
+          <tr class="netto" style="${sisa < 0 ? 'background:var(--danger)' : ''}"><td><b>SISA (${sisa >= 0 ? 'SURPLUS' : 'DEFISIT'})</b></td><td class="num"><b>${rupiah(sisa)}</b></td></tr>
+        </tfoot>
+      </table></div>
+      ${perKategori.length ? `<h2 style="margin-top:20px">Per Kategori</h2>
+      <div class="table-wrap"><table class="compact">
+        <thead><tr><th>Kategori</th><th class="num">Jumlah</th><th class="num">%</th></tr></thead>
+        <tbody>${perKategori.map((k) => `<tr><td>${esc(k.kategori)}</td><td class="num">${rupiah(k.total)}</td>
+          <td class="num">${pct(totalPengeluaran ? k.total / totalPengeluaran * 100 : 0)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td><b>Total</b></td><td class="num"><b>${rupiah(totalPengeluaran)}</b></td><td class="num"><b>100%</b></td></tr></tfoot>
+      </table></div>` : ''}
+    </div>
+  </div>
+  <div class="card">
+    <h2>Pengeluaran Bulanan<span class="spacer"></span><button class="btn primary sm" id="addKeluar">+ Tambah</button></h2>
+    <p class="hint">Catat estimasi pengeluaran rutin bulanan. Total dipakai untuk menghitung sisa pendapatan.</p>
+    ${pengeluaranRows.length ? `<div class="table-wrap"><table class="compact">
+      <thead><tr><th>Kategori</th><th>Nama</th><th class="num">Jumlah (Rp)</th><th>Catatan</th><th></th></tr></thead>
+      <tbody>${pengeluaranRows.map((r) => `<tr>
+        <td>${esc(r.kategori)}</td><td>${esc(r.nama)}</td><td class="num">${rp(r.jumlah)}</td><td>${esc(r.catatan || '')}</td>
+        <td class="actions"><button class="btn sm" data-edit="${r.id}">Ubah</button><button class="btn sm danger" data-del="${r.id}">Hapus</button></td>
+      </tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="2"><b>Total (${pengeluaranRows.length} pos)</b></td><td class="num"><b>${rp(totalPengeluaran)}</b></td><td colspan="2"></td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data pengeluaran.</div>'}
+  </div>`;
+
+  const form = (r = {}) => formModal(r.id ? 'Ubah pengeluaran' : 'Tambah pengeluaran', [
+    { name: 'kategori', label: 'Kategori', type: 'select', value: r.kategori,
+      options: KATEGORI_PENGELUARAN.map((k) => ({ value: k, label: k })), required: true },
+    { name: 'nama', label: 'Nama pengeluaran', value: r.nama, required: true, placeholder: 'Sewa kos, listrik, makan, dll.' },
+    { name: 'jumlah', label: 'Jumlah per bulan (Rp)', type: 'number', step: '1', value: r.jumlah, required: true },
+    { name: 'catatan', label: 'Catatan', value: r.catatan },
+  ], async (d) => {
+    if (r.id) await api('/api/pengeluaran/' + r.id, { method: 'PUT', body: d });
+    else await api(withUser('/api/pengeluaran'), { method: 'POST', body: d });
+    toast('Tersimpan'); render();
+  });
+
+  $('#addKeluar').onclick = () => form();
+  $$('[data-edit]', v).forEach((b) => b.onclick = () => form(pengeluaranRows.find((r) => r.id === Number(b.dataset.edit))));
+  $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('pengeluaran ini', () => api('/api/pengeluaran/' + b.dataset.del, { method: 'DELETE' })));
 };
 
 // ---------- Input portofolio (tabel seperti gambar 1) ----------
