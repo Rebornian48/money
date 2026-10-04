@@ -118,6 +118,12 @@ CREATE TABLE IF NOT EXISTS pengeluaran (
   catatan TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS pengaturan (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  tanggal_pertama_gaji TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // ---------- Data awal ----------

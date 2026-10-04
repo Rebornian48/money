@@ -508,11 +508,15 @@ const KATEGORI_PENGELUARAN = [
 ];
 
 VIEWS.aruskas = async (v) => {
-  const [gajiRows, oblRows, pengeluaranRows] = await Promise.all([
+  const [gajiRows, oblRows, pengeluaranRows, dashData, pengaturan] = await Promise.all([
     api(withUser('/api/gaji')),
     api(withUser('/api/obligasi')),
     api(withUser('/api/pengeluaran')),
+    api(withUser('/api/dashboard')),
+    api(withUser('/api/pengaturan')),
   ]);
+
+  const totalAset = dashData.ringkas.totalAset;
 
   const latest = gajiRows.length ? gajiRows[gajiRows.length - 1] : null;
   let gajiBruto = 0, gajiNetto = 0, gajiPokok = 0, tukin = 0, tunjab = 0, potGaji = 0;
@@ -534,7 +538,6 @@ VIEWS.aruskas = async (v) => {
 
   const totalPengeluaran = pengeluaranRows.reduce((a, r) => a + r.jumlah, 0);
   const sisa = totalPendapatanBulanan - totalPengeluaran;
-  const clsSisa = sisa >= 0 ? 'pos' : 'neg';
 
   const perKategori = Object.values(pengeluaranRows.reduce((acc, r) => {
     acc[r.kategori] ??= { kategori: r.kategori, total: 0 };
@@ -542,9 +545,54 @@ VIEWS.aruskas = async (v) => {
     return acc;
   }, {})).sort((a, b) => b.total - a.total);
 
+  // Hitung bulan sejak pertama gajian
+  const tglGaji = pengaturan.tanggal_pertama_gaji;
+  let bulanKerja = 0, totalGajiKumulatif = 0, totalKuponKumulatif = 0, totalPendapatanKumulatif = 0;
+  if (tglGaji) {
+    const mulai = new Date(tglGaji + 'T00:00:00');
+    const now = new Date();
+    bulanKerja = (now.getFullYear() - mulai.getFullYear()) * 12 + (now.getMonth() - mulai.getMonth());
+    if (now.getDate() < mulai.getDate()) bulanKerja--;
+    if (bulanKerja < 0) bulanKerja = 0;
+    totalGajiKumulatif = gajiNetto * bulanKerja;
+    totalKuponKumulatif = kuponBulanan * bulanKerja;
+    totalPendapatanKumulatif = totalPendapatanBulanan * bulanKerja;
+  }
+
   const baris = (label, val, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${rupiah(val)}</td></tr>`;
 
   v.innerHTML = `
+  <div class="kpis">
+    <div class="card kpi main"><div class="label">Total Aset (Acuan)</div><div class="value">${rupiah(totalAset)}</div><div class="sub">Portofolio + obligasi + saham + crypto</div></div>
+    <div class="card kpi"><div class="label">Pendapatan / Bulan</div><div class="value">${rupiah(totalPendapatanBulanan)}</div><div class="sub">Gaji netto + kupon obligasi</div></div>
+    <div class="card kpi"><div class="label">Pengeluaran / Bulan</div><div class="value">${rupiah(totalPengeluaran)}</div><div class="sub">${pengeluaranRows.length} pos pengeluaran</div></div>
+    <div class="card kpi"><div class="label">Sisa (${sisa >= 0 ? 'Surplus' : 'Defisit'})</div><div class="value ${sisa >= 0 ? 'pos' : 'neg'}">${rupiah(sisa)}</div><div class="sub">${totalPendapatanBulanan ? pct(sisa / totalPendapatanBulanan * 100) + ' dari pendapatan' : '-'}</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Tanggal Pertama Gajian</h2>
+    <div class="toolbar">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px">Mulai menerima gaji sejak
+        <input type="date" id="tglGajiInput" value="${esc(tglGaji || '')}" style="width:auto;margin:0">
+      </label>
+      <button class="btn sm primary" id="saveTglGaji">Simpan</button>
+    </div>
+    ${tglGaji ? `<div style="margin-top:14px">
+      <div class="table-wrap"><table class="compact slip-table" style="max-width:100%">
+        <tbody>
+          <tr><td>Tanggal pertama gajian</td><td class="num"><b>${tglPanjang(tglGaji)}</b></td></tr>
+          <tr><td>Lama bekerja</td><td class="num"><b>${Math.floor(bulanKerja / 12)} tahun ${bulanKerja % 12} bulan</b></td></tr>
+          ${baris('Perkiraan total gaji diterima', totalGajiKumulatif)}
+          ${baris('Perkiraan total kupon obligasi', totalKuponKumulatif)}
+        </tbody>
+        <tfoot>
+          <tr class="netto"><td><b>PERKIRAAN TOTAL PENDAPATAN</b></td><td class="num"><b>${rupiah(totalPendapatanKumulatif)}</b></td></tr>
+        </tfoot>
+      </table></div>
+      <p class="hint" style="margin-top:8px">Rasio aset terhadap pendapatan kumulatif: <b>${totalPendapatanKumulatif ? pct(totalAset / totalPendapatanKumulatif * 100) : '-'}</b> — semakin tinggi berarti semakin banyak pendapatan yang tersimpan sebagai aset.</p>
+    </div>` : '<p class="hint" style="margin-top:8px">Isi tanggal untuk melihat perkiraan pendapatan kumulatif.</p>'}
+  </div>
+
   <div class="grid-2">
     <div class="card">
       <h2>Estimasi Pendapatan Bulanan</h2>
@@ -624,6 +672,13 @@ VIEWS.aruskas = async (v) => {
     else await api(withUser('/api/pengeluaran'), { method: 'POST', body: d });
     toast('Tersimpan'); render();
   });
+
+  $('#saveTglGaji').onclick = async () => {
+    try {
+      await api(withUser('/api/pengaturan'), { method: 'PUT', body: { tanggal_pertama_gaji: $('#tglGajiInput').value } });
+      toast('Tanggal tersimpan'); render();
+    } catch (e) { toast(e.message, true); }
+  };
 
   $('#addKeluar').onclick = () => form();
   $$('[data-edit]', v).forEach((b) => b.onclick = () => form(pengeluaranRows.find((r) => r.id === Number(b.dataset.edit))));

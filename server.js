@@ -464,6 +464,24 @@ app.delete('/api/pengeluaran/:id', requireAuth, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- Pengaturan per user ----------
+app.get('/api/pengaturan', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT * FROM pengaturan WHERE user_id = ?').get(targetUser(req));
+  res.json(row || { tanggal_pertama_gaji: null });
+});
+app.put('/api/pengaturan', requireAuth, wrap((req, res) => {
+  const uid = targetUser(req);
+  const tgl = str(req.body.tanggal_pertama_gaji) || null;
+  if (tgl && !isDate(tgl)) return res.status(400).json({ error: 'Tanggal tidak valid.' });
+  const exists = db.prepare('SELECT 1 FROM pengaturan WHERE user_id = ?').get(uid);
+  if (exists) {
+    db.prepare('UPDATE pengaturan SET tanggal_pertama_gaji = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(tgl, uid);
+  } else {
+    db.prepare('INSERT INTO pengaturan (user_id, tanggal_pertama_gaji) VALUES (?, ?)').run(uid, tgl);
+  }
+  res.json({ ok: true });
+}));
+
 // ---------- Dashboard ----------
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const uid = targetUser(req);
