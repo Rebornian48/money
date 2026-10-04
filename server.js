@@ -18,8 +18,8 @@ app.use(cookieSession({
   sameSite: 'lax',
   secure: process.env.COOKIE_SECURE === '1',
 }));
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'chart.js', 'dist')));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false }));
+app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'chart.js', 'dist'), { maxAge: '7d' }));
 
 // ---------- Helper ----------
 const wrap = (fn) => (req, res) => {
