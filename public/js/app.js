@@ -558,6 +558,8 @@ VIEWS.aruskas = async (v) => {
     totalKuponKumulatif = kuponBulanan * bulanKerja;
     totalPendapatanKumulatif = totalPendapatanBulanan * bulanKerja;
   }
+  const pertumbuhanAsetPerBulan = bulanKerja > 0 ? totalAset / bulanKerja : 0;
+  const estimasiPengeluaranRiil = bulanKerja > 0 ? totalPendapatanBulanan - pertumbuhanAsetPerBulan : 0;
 
   const baris = (label, val, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${rupiah(val)}</td></tr>`;
 
@@ -589,7 +591,20 @@ VIEWS.aruskas = async (v) => {
           <tr class="netto"><td><b>PERKIRAAN TOTAL PENDAPATAN</b></td><td class="num"><b>${rupiah(totalPendapatanKumulatif)}</b></td></tr>
         </tfoot>
       </table></div>
-      <p class="hint" style="margin-top:8px">Rasio aset terhadap pendapatan kumulatif: <b>${totalPendapatanKumulatif ? pct(totalAset / totalPendapatanKumulatif * 100) : '-'}</b> — semakin tinggi berarti semakin banyak pendapatan yang tersimpan sebagai aset.</p>
+      <div class="table-wrap" style="margin-top:14px"><table class="compact slip-table" style="max-width:100%">
+        <thead><tr><th colspan="2" class="section-head pos">ANALISIS KEUANGAN</th></tr></thead>
+        <tbody>
+          ${baris('Total Aset saat ini', totalAset)}
+          <tr><td>Lama bekerja</td><td class="num">${bulanKerja} bulan</td></tr>
+          ${baris('Pertumbuhan aset / bulan', pertumbuhanAsetPerBulan)}
+          ${baris('Pendapatan / bulan', totalPendapatanBulanan)}
+        </tbody>
+        <tfoot>
+          <tr class="netto" style="${estimasiPengeluaranRiil > totalPendapatanBulanan * 0.7 ? 'background:var(--danger)' : ''}"><td><b>ESTIMASI PENGELUARAN RIIL / BULAN</b></td><td class="num"><b>${rupiah(estimasiPengeluaranRiil)}</b></td></tr>
+        </tfoot>
+      </table></div>
+      <p class="hint" style="margin-top:8px">Pendapatan ${rupiah(totalPendapatanBulanan)} − pertumbuhan aset ${rupiah(pertumbuhanAsetPerBulan)} = estimasi pengeluaran ${rupiah(estimasiPengeluaranRiil)} / bulan.
+      Rasio aset/pendapatan: <b>${totalPendapatanKumulatif ? pct(totalAset / totalPendapatanKumulatif * 100) : '-'}</b></p>
     </div>` : '<p class="hint" style="margin-top:8px">Isi tanggal untuk melihat perkiraan pendapatan kumulatif.</p>'}
   </div>
 
