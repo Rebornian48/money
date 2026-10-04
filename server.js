@@ -380,6 +380,51 @@ app.delete('/api/crypto/:id', requireAuth, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- Riwayat Gaji PNS ----------
+const GAJI_SQL = `SELECT * FROM riwayat_gaji WHERE user_id = ? ORDER BY tanggal ASC, id ASC`;
+const GAJI_FIELDS = ['tanggal', 'status', 'dokumen', 'gaji_pokok', 'tunjangan_kinerja', 'tunjangan_jabatan'];
+
+function validGaji(b) {
+  const v = {
+    tanggal: str(b.tanggal), status: str(b.status) || 'PNS', dokumen: str(b.dokumen),
+    gaji_pokok: num(b.gaji_pokok), tunjangan_kinerja: num(b.tunjangan_kinerja) || 0,
+    tunjangan_jabatan: num(b.tunjangan_jabatan) || 0,
+  };
+  if (!isDate(v.tanggal)) return { error: 'Tanggal wajib diisi (format YYYY-MM-DD).' };
+  if (!['CPNS', 'PNS'].includes(v.status)) return { error: 'Status harus CPNS atau PNS.' };
+  if (!v.dokumen) return { error: 'Keterangan dokumen wajib diisi.' };
+  if (!(v.gaji_pokok > 0)) return { error: 'Gaji pokok harus lebih dari 0.' };
+  if (v.tunjangan_kinerja < 0 || v.tunjangan_jabatan < 0) return { error: 'Tunjangan tidak boleh negatif.' };
+  return v;
+}
+function ownedGaji(req, res) {
+  const row = db.prepare('SELECT * FROM riwayat_gaji WHERE id = ?').get(Number(req.params.id));
+  if (!row || !canTouch(req, row.user_id)) { res.status(404).json({ error: 'Data tidak ditemukan.' }); return null; }
+  return row;
+}
+
+app.get('/api/gaji', requireAuth, (req, res) => res.json(db.prepare(GAJI_SQL).all(targetUser(req))));
+app.post('/api/gaji', requireAuth, wrap((req, res) => {
+  const v = validGaji(req.body);
+  if (v.error) return res.status(400).json(v);
+  const info = db.prepare(`INSERT INTO riwayat_gaji (user_id, ${GAJI_FIELDS.join(',')}) VALUES (?,?,?,?,?,?,?)`)
+    .run(targetUser(req), ...GAJI_FIELDS.map((f) => v[f]));
+  res.json({ id: info.lastInsertRowid });
+}));
+app.put('/api/gaji/:id', requireAuth, wrap((req, res) => {
+  if (!ownedGaji(req, res)) return;
+  const v = validGaji(req.body);
+  if (v.error) return res.status(400).json(v);
+  db.prepare(`UPDATE riwayat_gaji SET ${GAJI_FIELDS.map((f) => `${f}=?`).join(',')} WHERE id = ?`)
+    .run(...GAJI_FIELDS.map((f) => v[f]), Number(req.params.id));
+  res.json({ ok: true });
+}));
+app.delete('/api/gaji/:id', requireAuth, wrap((req, res) => {
+  if (!ownedGaji(req, res)) return;
+  db.prepare('DELETE FROM riwayat_gaji WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+}));
+
 // ---------- Dashboard ----------
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const uid = targetUser(req);

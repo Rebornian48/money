@@ -96,6 +96,18 @@ CREATE TABLE IF NOT EXISTS crypto (
   catatan TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS riwayat_gaji (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  tanggal TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PNS',
+  dokumen TEXT NOT NULL,
+  gaji_pokok REAL NOT NULL DEFAULT 0,
+  tunjangan_kinerja REAL NOT NULL DEFAULT 0,
+  tunjangan_jabatan REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // ---------- Data awal ----------

@@ -118,13 +118,13 @@ async function loadMaster() {
 }
 
 const TITLES = {
-  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham', crypto: 'Crypto',
+  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham', crypto: 'Crypto', gaji: 'Gaji PNS',
   jenis: 'Jenis Instrumen Keuangan', lembaga: 'Nama Instrumen Keuangan', penyimpanan: 'Instrumen Investasi / Penyimpanan', users: 'Manajemen Pengguna',
 };
 async function render() {
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === state.view));
   $('#viewTitle').textContent = TITLES[state.view];
-  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham', 'crypto'].includes(state.view));
+  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham', 'crypto', 'gaji'].includes(state.view));
   state.charts.forEach((c) => c.destroy()); state.charts = [];
   const v = $('#view');
   v.innerHTML = '<div class="empty">Memuat…</div>';
@@ -413,6 +413,91 @@ VIEWS.crypto = async (v) => {
   $('#addCrypto').onclick = () => form();
   $$('[data-edit]', v).forEach((b) => b.onclick = () => form(rows.find((c) => c.id === Number(b.dataset.edit))));
   $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('crypto ini', () => api('/api/crypto/' + b.dataset.del, { method: 'DELETE' })));
+};
+
+// ---------- Gaji PNS ----------
+const tglPanjang = (s) => {
+  if (!s) return '-';
+  const d = new Date(s + 'T00:00:00');
+  const hari = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'][d.getDay()];
+  return `${hari}, ${d.getDate()} ${BULAN[d.getMonth()]} ${d.getFullYear()}`;
+};
+
+VIEWS.gaji = async (v) => {
+  const rows = await api(withUser('/api/gaji'));
+  const latest = rows.length ? rows[rows.length - 1] : null;
+
+  let slipHtml = '<div class="card"><h2>Slip Gaji Bulanan</h2><div class="empty">Belum ada data riwayat gaji. Tambahkan riwayat di bawah.</div></div>';
+  if (latest) {
+    const gp = latest.gaji_pokok;
+    const tukin = latest.tunjangan_kinerja;
+    const tunjab = latest.tunjangan_jabatan;
+    const bruto = gp + tukin + tunjab;
+    const bpjs = Math.round(gp * 0.01);
+    const taspen = Math.round(gp * 0.08);
+    const tapera = Math.round(gp * 0.025);
+    const totalPot = bpjs + taspen + tapera;
+    const netto = bruto - totalPot;
+
+    const baris = (label, val, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${rupiah(val)}</td></tr>`;
+
+    slipHtml = `<div class="card">
+      <h2>Slip Gaji Bulanan (estimasi)</h2>
+      <p class="hint">Berdasarkan data terbaru: ${esc(latest.dokumen)} — ${tglPanjang(latest.tanggal)} (${esc(latest.status)})</p>
+      <div class="table-wrap"><table class="compact slip-table">
+        <thead><tr><th colspan="2" class="section-head pos">PENDAPATAN</th></tr></thead>
+        <tbody>
+          ${baris('Gaji Pokok', gp)}
+          ${baris('Tunjangan Kinerja', tukin)}
+          ${baris('Tunjangan Jabatan', tunjab)}
+          <tr class="total"><td><b>Total Pendapatan (Bruto)</b></td><td class="num"><b>${rupiah(bruto)}</b></td></tr>
+        </tbody>
+        <thead><tr><th colspan="2" class="section-head neg">POTONGAN</th></tr></thead>
+        <tbody>
+          ${baris('BPJS Kesehatan (1% Gapok)', bpjs)}
+          ${baris('Taspen — Pensiun & THT (8% Gapok)', taspen)}
+          ${baris('Tapera (2,5% Gapok)', tapera)}
+          <tr class="total"><td><b>Total Potongan</b></td><td class="num"><b>${rupiah(totalPot)}</b></td></tr>
+        </tbody>
+        <tfoot>
+          <tr class="netto"><td><b>GAJI BERSIH (Take Home Pay)</b></td><td class="num"><b>${rupiah(netto)}</b></td></tr>
+        </tfoot>
+      </table></div>
+    </div>`;
+  }
+
+  v.innerHTML = `${slipHtml}
+  <div class="card">
+    <h2>Riwayat Gaji & Karir<span class="spacer"></span><button class="btn primary sm" id="addGaji">+ Tambah</button></h2>
+    <p class="hint">Catat setiap perubahan gaji: kenaikan berkala, penyesuaian, kenaikan pangkat, dll.</p>
+    ${rows.length ? `<div class="table-wrap"><table class="compact">
+      <thead><tr><th>No</th><th>Tanggal</th><th>Status</th><th>Dokumen / Keterangan</th>
+        <th class="num">Gaji Pokok</th><th class="num">Tunj. Kinerja</th><th class="num">Tunj. Jabatan</th><th></th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr>
+        <td>${i + 1}</td><td style="white-space:nowrap">${tglPanjang(r.tanggal)}</td><td>${esc(r.status)}</td><td>${esc(r.dokumen)}</td>
+        <td class="num">${rp(r.gaji_pokok)}</td><td class="num">${rp(r.tunjangan_kinerja)}</td><td class="num">${rp(r.tunjangan_jabatan)}</td>
+        <td class="actions"><button class="btn sm" data-edit="${r.id}">Ubah</button><button class="btn sm danger" data-del="${r.id}">Hapus</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '<div class="empty">Belum ada data riwayat gaji.</div>'}
+  </div>`;
+
+  const form = (r = {}) => formModal(r.id ? 'Ubah riwayat' : 'Tambah riwayat', [
+    { name: 'tanggal', label: 'Tanggal', type: 'date', value: r.tanggal, required: true, half: true },
+    { name: 'status', label: 'Status', type: 'select', value: r.status || 'PNS',
+      options: [{ value: 'PNS', label: 'PNS' }, { value: 'CPNS', label: 'CPNS' }], half: true },
+    { name: 'dokumen', label: 'Dokumen / Keterangan', value: r.dokumen, required: true },
+    { name: 'gaji_pokok', label: 'Gaji Pokok (Rp)', type: 'number', step: '1', value: r.gaji_pokok, required: true },
+    { name: 'tunjangan_kinerja', label: 'Tunjangan Kinerja (Rp)', type: 'number', step: '1', value: r.tunjangan_kinerja, half: true },
+    { name: 'tunjangan_jabatan', label: 'Tunjangan Jabatan (Rp)', type: 'number', step: '1', value: r.tunjangan_jabatan, half: true },
+  ], async (d) => {
+    if (r.id) await api('/api/gaji/' + r.id, { method: 'PUT', body: d });
+    else await api(withUser('/api/gaji'), { method: 'POST', body: d });
+    toast('Tersimpan'); render();
+  });
+
+  $('#addGaji').onclick = () => form();
+  $$('[data-edit]', v).forEach((b) => b.onclick = () => form(rows.find((r) => r.id === Number(b.dataset.edit))));
+  $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('riwayat gaji ini', () => api('/api/gaji/' + b.dataset.del, { method: 'DELETE' })));
 };
 
 // ---------- Input portofolio (tabel seperti gambar 1) ----------
