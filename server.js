@@ -156,7 +156,7 @@ const PORTO_SQL = `
   JOIN jenis_instrumen j ON j.id = p.jenis_id
   JOIN lembaga l ON l.id = p.lembaga_id
   JOIN instrumen_penyimpanan s ON s.id = p.penyimpanan_id
-  WHERE p.user_id = ? ORDER BY j.id, l.nama, s.nama`;
+  WHERE p.user_id = ? ORDER BY j.id, l.nama, p.nama_rekening, s.nama`;
 
 function validPorto(b) {
   const v = { jenis_id: num(b.jenis_id), lembaga_id: num(b.lembaga_id), penyimpanan_id: num(b.penyimpanan_id), nilai: num(b.nilai) };
@@ -164,6 +164,7 @@ function validPorto(b) {
   if (!Number.isFinite(v.nilai) || v.nilai < 0) return { error: 'Nilai harus angka ≥ 0.' };
   const l = db.prepare('SELECT jenis_id FROM lembaga WHERE id = ?').get(v.lembaga_id);
   if (!l || l.jenis_id !== v.jenis_id) return { error: 'Nama instrumen tidak sesuai dengan jenisnya.' };
+  v.nama_rekening = str(b.nama_rekening);
   v.catatan = str(b.catatan);
   return v;
 }
@@ -172,8 +173,8 @@ app.get('/api/portofolio', requireAuth, (req, res) => res.json(db.prepare(PORTO_
 app.post('/api/portofolio', requireAuth, wrap((req, res) => {
   const v = validPorto(req.body);
   if (v.error) return res.status(400).json(v);
-  const info = db.prepare(`INSERT INTO portofolio (user_id, jenis_id, lembaga_id, penyimpanan_id, nilai, catatan)
-                           VALUES (?,?,?,?,?,?)`).run(targetUser(req), v.jenis_id, v.lembaga_id, v.penyimpanan_id, v.nilai, v.catatan);
+  const info = db.prepare(`INSERT INTO portofolio (user_id, jenis_id, lembaga_id, penyimpanan_id, nama_rekening, nilai, catatan)
+                           VALUES (?,?,?,?,?,?,?)`).run(targetUser(req), v.jenis_id, v.lembaga_id, v.penyimpanan_id, v.nama_rekening, v.nilai, v.catatan);
   res.json({ id: info.lastInsertRowid });
 }));
 app.put('/api/portofolio/:id', requireAuth, wrap((req, res) => {
@@ -181,8 +182,8 @@ app.put('/api/portofolio/:id', requireAuth, wrap((req, res) => {
   if (!row || !canTouch(req, row.user_id)) return res.status(404).json({ error: 'Data tidak ditemukan.' });
   const v = validPorto(req.body);
   if (v.error) return res.status(400).json(v);
-  db.prepare(`UPDATE portofolio SET jenis_id=?, lembaga_id=?, penyimpanan_id=?, nilai=?, catatan=?, updated_at=CURRENT_TIMESTAMP
-              WHERE id = ?`).run(v.jenis_id, v.lembaga_id, v.penyimpanan_id, v.nilai, v.catatan, Number(req.params.id));
+  db.prepare(`UPDATE portofolio SET jenis_id=?, lembaga_id=?, penyimpanan_id=?, nama_rekening=?, nilai=?, catatan=?, updated_at=CURRENT_TIMESTAMP
+              WHERE id = ?`).run(v.jenis_id, v.lembaga_id, v.penyimpanan_id, v.nama_rekening, v.nilai, v.catatan, Number(req.params.id));
   res.json({ ok: true });
 }));
 app.delete('/api/portofolio/:id', requireAuth, wrap((req, res) => {
@@ -316,6 +317,69 @@ app.delete('/api/saham/:id', requireAuth, wrap((req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- Crypto ----------
+function hitungCrypto(c) {
+  const modal = c.jumlah * c.harga_beli;
+  const harga = c.harga_terkini > 0 ? c.harga_terkini : c.harga_beli;
+  const nilai = c.jumlah * harga;
+  const laba = nilai - modal;
+  return { ...c, modal, nilai, laba, persen: modal ? (laba / modal) * 100 : 0 };
+}
+const CRYPTO_SQL = `
+  SELECT c.*, e.nama AS exchange FROM crypto c
+  LEFT JOIN lembaga e ON e.id = c.exchange_id
+  WHERE c.user_id = ? ORDER BY c.simbol, c.nama_aset`;
+const CRYPTO_FIELDS = ['exchange_id', 'nama_aset', 'simbol', 'jumlah', 'harga_beli', 'harga_terkini', 'catatan'];
+
+function validCrypto(b) {
+  const v = {
+    exchange_id: num(b.exchange_id) || null,
+    nama_aset: str(b.nama_aset), simbol: str(b.simbol).toUpperCase(),
+    jumlah: num(b.jumlah), harga_beli: num(b.harga_beli),
+    harga_terkini: str(b.harga_terkini) === '' ? null : num(b.harga_terkini),
+    catatan: str(b.catatan),
+  };
+  if (!v.nama_aset || !v.simbol) return { error: 'Nama aset dan simbol wajib diisi.' };
+  if (!(v.jumlah > 0)) return { error: 'Jumlah harus lebih dari 0.' };
+  if (!(v.harga_beli >= 0)) return { error: 'Harga beli harus angka ≥ 0.' };
+  if (v.harga_terkini !== null && !(v.harga_terkini >= 0)) return { error: 'Harga terkini harus angka ≥ 0.' };
+  return v;
+}
+function ownedCrypto(req, res) {
+  const row = db.prepare('SELECT * FROM crypto WHERE id = ?').get(Number(req.params.id));
+  if (!row || !canTouch(req, row.user_id)) { res.status(404).json({ error: 'Data tidak ditemukan.' }); return null; }
+  return row;
+}
+
+app.get('/api/crypto', requireAuth, (req, res) => res.json(db.prepare(CRYPTO_SQL).all(targetUser(req)).map(hitungCrypto)));
+app.post('/api/crypto', requireAuth, wrap((req, res) => {
+  const v = validCrypto(req.body);
+  if (v.error) return res.status(400).json(v);
+  const info = db.prepare(`INSERT INTO crypto (user_id, ${CRYPTO_FIELDS.join(',')}) VALUES (?,?,?,?,?,?,?,?)`)
+    .run(targetUser(req), ...CRYPTO_FIELDS.map((f) => v[f]));
+  res.json({ id: info.lastInsertRowid });
+}));
+app.put('/api/crypto/:id', requireAuth, wrap((req, res) => {
+  if (!ownedCrypto(req, res)) return;
+  const v = validCrypto(req.body);
+  if (v.error) return res.status(400).json(v);
+  db.prepare(`UPDATE crypto SET ${CRYPTO_FIELDS.map((f) => `${f}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(...CRYPTO_FIELDS.map((f) => v[f]), Number(req.params.id));
+  res.json({ ok: true });
+}));
+app.patch('/api/crypto/:id/harga', requireAuth, wrap((req, res) => {
+  if (!ownedCrypto(req, res)) return;
+  const h = num(req.body.harga_terkini);
+  if (!(h >= 0)) return res.status(400).json({ error: 'Harga harus angka ≥ 0.' });
+  db.prepare('UPDATE crypto SET harga_terkini = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(h, Number(req.params.id));
+  res.json({ ok: true });
+}));
+app.delete('/api/crypto/:id', requireAuth, wrap((req, res) => {
+  if (!ownedCrypto(req, res)) return;
+  db.prepare('DELETE FROM crypto WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+}));
+
 // ---------- Dashboard ----------
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const uid = targetUser(req);
@@ -350,7 +414,18 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   const totalSaham = saham.reduce((a, s) => a + s.nilai, 0);
   const modalSaham = saham.reduce((a, s) => a + s.modal, 0);
 
-  // Komposisi aset gabungan: portofolio per instrumen + obligasi aktif + saham
+  // Crypto, digabung per simbol
+  const cryptoRows = db.prepare(CRYPTO_SQL).all(uid).map(hitungCrypto);
+  const cryptoPerAset = Object.values(cryptoRows.reduce((acc, c) => {
+    acc[c.simbol] ??= { label: c.simbol, nama: c.nama_aset, jumlah: 0, modal: 0, total: 0 };
+    acc[c.simbol].jumlah += c.jumlah; acc[c.simbol].modal += c.modal; acc[c.simbol].total += c.nilai;
+    return acc;
+  }, {})).map((r) => ({ ...r, laba: r.total - r.modal, persen: r.modal ? ((r.total - r.modal) / r.modal) * 100 : 0 }))
+    .sort((a, b) => b.total - a.total);
+  const totalCrypto = cryptoRows.reduce((a, c) => a + c.nilai, 0);
+  const modalCrypto = cryptoRows.reduce((a, c) => a + c.modal, 0);
+
+  // Komposisi aset gabungan: portofolio per instrumen + obligasi aktif + saham + crypto
   const komposisi = perPenyimpanan.map((r) => ({ label: r.label, total: r.total }));
   const tambah = (label, total) => {
     if (total <= 0) return;
@@ -359,20 +434,25 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   };
   tambah('Obligasi', totalObl);
   tambah('Saham', totalSaham);
+  tambah('Kripto', totalCrypto);
   komposisi.sort((a, b) => b.total - a.total);
 
   res.json({
     ringkas: {
-      totalPorto, totalObl, totalSaham, totalAset: totalPorto + totalObl + totalSaham,
+      totalPorto, totalObl, totalSaham, totalCrypto,
+      totalAset: totalPorto + totalObl + totalSaham + totalCrypto,
       proyeksiObl: aktif.reduce((a, o) => a + o.proyeksi, 0),
       kuponRata: totalObl ? aktif.reduce((a, o) => a + o.kupon * o.saldo_awal, 0) / totalObl : 0,
       jumlahObl: aktif.length,
       modalSaham, labaSaham: totalSaham - modalSaham,
       persenSaham: modalSaham ? ((totalSaham - modalSaham) / modalSaham) * 100 : 0,
       jumlahEmiten: sahamPerEmiten.length,
+      modalCrypto, labaCrypto: totalCrypto - modalCrypto,
+      persenCrypto: modalCrypto ? ((totalCrypto - modalCrypto) / modalCrypto) * 100 : 0,
+      jumlahCrypto: cryptoPerAset.length,
     },
-    perJenis, perPenyimpanan, perLembaga, komposisi, oblPerJenis, sahamPerEmiten,
-    obligasi: obl,
+    perJenis, perPenyimpanan, perLembaga, komposisi, oblPerJenis, sahamPerEmiten, cryptoPerAset,
+    obligasi: obl, crypto: cryptoRows,
   });
 });
 

@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS portofolio (
   jenis_id INTEGER NOT NULL REFERENCES jenis_instrumen(id) ON DELETE RESTRICT,
   lembaga_id INTEGER NOT NULL REFERENCES lembaga(id) ON DELETE RESTRICT,
   penyimpanan_id INTEGER NOT NULL REFERENCES instrumen_penyimpanan(id) ON DELETE RESTRICT,
+  nama_rekening TEXT NOT NULL DEFAULT '',
   nilai REAL NOT NULL DEFAULT 0,
   catatan TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -82,6 +83,19 @@ CREATE TABLE IF NOT EXISTS saham (
   catatan TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS crypto (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  exchange_id INTEGER REFERENCES lembaga(id) ON DELETE SET NULL,
+  nama_aset TEXT NOT NULL,
+  simbol TEXT NOT NULL,
+  jumlah REAL NOT NULL DEFAULT 0,
+  harga_beli REAL NOT NULL DEFAULT 0,
+  harga_terkini REAL,
+  catatan TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // ---------- Data awal ----------
@@ -91,7 +105,8 @@ const SEED = {
     ['Bank', 'Rekening bank (tabungan, giro, deposito)'],
     ['KUE', 'Kartu Uang Elektronik'],
     ['Saham', 'Emiten di Bursa Efek Indonesia'],
-    ['Platform Investasi', 'Sekuritas, aplikasi emas, reksa dana & kripto'],
+    ['Platform Investasi', 'Sekuritas, aplikasi emas, reksa dana'],
+    ['Crypto', 'Aset kripto / cryptocurrency'],
   ],
   lembaga: {
     'Bank': [
@@ -133,7 +148,10 @@ const SEED = {
     'Platform Investasi': [
       ['Pegadaian', 'Pegadaian'], ['Bibit', 'Bibit'], ['Bareksa', 'Bareksa'], ['Pluang', 'Pluang'],
       ['Ajaib', 'Ajaib'], ['Stockbit', 'Stockbit'], ['IPOT (Indo Premier)', 'IPOT'],
+    ],
+    'Crypto': [
       ['Indodax', 'Indodax'], ['Tokocrypto', 'Tokocrypto'], ['Pintu', 'Pintu'],
+      ['Rekeningku', 'Rekeningku'], ['Luno', 'Luno'],
     ],
   },
   penyimpanan: [
@@ -208,6 +226,29 @@ function seedDemo(userId) {
   rows.forEach((r) => ins.run(userId, ...r));
 }
 
+function migrate() {
+  const cols = db.prepare('PRAGMA table_info(portofolio)').all();
+  if (!cols.find((c) => c.name === 'nama_rekening')) {
+    db.exec("ALTER TABLE portofolio ADD COLUMN nama_rekening TEXT NOT NULL DEFAULT ''");
+  }
+  const cryptoJenis = db.prepare("SELECT id FROM jenis_instrumen WHERE nama = 'Crypto'").get();
+  if (!cryptoJenis && db.prepare('SELECT COUNT(*) c FROM jenis_instrumen').get().c > 0) {
+    db.prepare('INSERT INTO jenis_instrumen (nama, keterangan) VALUES (?, ?)').run('Crypto', 'Aset kripto / cryptocurrency');
+    const cid = db.prepare("SELECT id FROM jenis_instrumen WHERE nama = 'Crypto'").get().id;
+    ['Indodax', 'Tokocrypto', 'Pintu'].forEach((name) => {
+      const l = db.prepare('SELECT id FROM lembaga WHERE nama = ?').get(name);
+      if (l) {
+        db.prepare('UPDATE lembaga SET jenis_id = ? WHERE id = ?').run(cid, l.id);
+        db.prepare('UPDATE portofolio SET jenis_id = ? WHERE lembaga_id = ?').run(cid, l.id);
+      }
+    });
+    [['Rekeningku', 'Rekeningku'], ['Luno', 'Luno']].forEach(([n, s]) => {
+      try { db.prepare('INSERT INTO lembaga (jenis_id, nama, singkatan) VALUES (?, ?, ?)').run(cid, n, s); } catch (e) { /* sudah ada */ }
+    });
+  }
+}
+
+migrate();
 seed();
 
 module.exports = { db, DB_FILE };

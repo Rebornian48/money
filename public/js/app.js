@@ -118,13 +118,13 @@ async function loadMaster() {
 }
 
 const TITLES = {
-  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham',
+  dashboard: 'Dashboard', portofolio: 'Input Portofolio', obligasi: 'Obligasi', saham: 'Saham', crypto: 'Crypto',
   jenis: 'Jenis Instrumen Keuangan', lembaga: 'Nama Instrumen Keuangan', penyimpanan: 'Instrumen Investasi / Penyimpanan', users: 'Manajemen Pengguna',
 };
 async function render() {
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === state.view));
   $('#viewTitle').textContent = TITLES[state.view];
-  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham'].includes(state.view));
+  $('.user-pick').classList.toggle('hidden', !isAdmin() || !['dashboard', 'portofolio', 'obligasi', 'saham', 'crypto'].includes(state.view));
   state.charts.forEach((c) => c.destroy()); state.charts = [];
   const v = $('#view');
   v.innerHTML = '<div class="empty">Memuat…</div>';
@@ -187,11 +187,13 @@ VIEWS.dashboard = async (v) => {
   const r = d.ringkas;
   v.innerHTML = `
   <div class="kpis">
-    <div class="card kpi main"><div class="label">Total Aset</div><div class="value">${rupiah(r.totalAset)}</div><div class="sub">Portofolio + obligasi aktif + saham</div></div>
+    <div class="card kpi main"><div class="label">Total Aset</div><div class="value">${rupiah(r.totalAset)}</div><div class="sub">Portofolio + obligasi + saham + crypto</div></div>
     <div class="card kpi"><div class="label">Portofolio (bank, e-wallet, dll.)</div><div class="value">${rupiah(r.totalPorto)}</div><div class="sub">${porto.length} pos</div></div>
     <div class="card kpi"><div class="label">Obligasi aktif</div><div class="value">${rupiah(r.totalObl)}</div><div class="sub">${r.jumlahObl} seri · proyeksi ${rupiah(r.proyeksiObl)}</div></div>
     <div class="card kpi"><div class="label">Saham (nilai pasar)</div><div class="value">${rupiah(r.totalSaham)}</div>
       <div class="sub">${r.jumlahEmiten} emiten · <span class="${r.labaSaham < 0 ? 'neg' : 'pos'}">${r.labaSaham >= 0 ? '+' : ''}${rupiah(r.labaSaham)} (${pct(r.persenSaham)})</span></div></div>
+    <div class="card kpi"><div class="label">Crypto (nilai pasar)</div><div class="value">${rupiah(r.totalCrypto)}</div>
+      <div class="sub">${r.jumlahCrypto} aset · <span class="${r.labaCrypto < 0 ? 'neg' : 'pos'}">${r.labaCrypto >= 0 ? '+' : ''}${rupiah(r.labaCrypto)} (${pct(r.persenCrypto)})</span></div></div>
   </div>
 
   <div class="section-title">Ringkasan portofolio</div>
@@ -208,10 +210,10 @@ VIEWS.dashboard = async (v) => {
 
   <div class="card"><h2>Detail portofolio<span class="spacer"></span><button class="btn sm" data-go="portofolio">Ubah data</button></h2>
     ${porto.length ? `<div class="table-wrap"><table>
-      <thead><tr><th>Jenis Instrumen Keuangan</th><th>Nama Instrumen Keuangan</th><th>Instrumen Investasi / Penyimpanan</th><th class="num">Nilai (Rp)</th><th class="num">%</th></tr></thead>
-      <tbody>${porto.map((p) => `<tr><td>${esc(p.jenis)}</td><td>${esc(p.lembaga)}</td><td>${esc(p.penyimpanan)}</td>
+      <thead><tr><th>Jenis</th><th>Nama</th><th>Rekening / Kantong</th><th>Penyimpanan</th><th class="num">Nilai (Rp)</th><th class="num">%</th></tr></thead>
+      <tbody>${porto.map((p) => `<tr><td>${esc(p.jenis)}</td><td>${esc(p.lembaga)}</td><td>${esc(p.nama_rekening || '-')}</td><td>${esc(p.penyimpanan)}</td>
         <td class="num">${rp(p.nilai)}</td><td class="num">${pct(r.totalPorto ? p.nilai / r.totalPorto * 100 : 0)}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="3">Total</td><td class="num">${rp(r.totalPorto)}</td><td class="num">100%</td></tr></tfoot>
+      <tfoot><tr><td colspan="4">Total</td><td class="num">${rp(r.totalPorto)}</td><td class="num">100%</td></tr></tfoot>
     </table></div>` : '<div class="empty">Belum ada data portofolio.</div>'}
   </div>
 
@@ -244,6 +246,23 @@ VIEWS.dashboard = async (v) => {
       <tfoot><tr><td colspan="3">Total</td><td class="num">${rp(r.modalSaham)}</td><td class="num">${rp(r.totalSaham)}</td>
         <td class="num ${r.labaSaham < 0 ? 'neg' : 'pos'}">${r.labaSaham >= 0 ? '+' : ''}${rp(r.labaSaham)}</td><td class="num">${pct(r.persenSaham)}</td><td class="num">100%</td></tr></tfoot>
     </table></div>` : '<div class="empty">Belum ada data saham.</div>'}
+  </div>
+
+  <div class="section-title">Crypto</div>
+  <div class="grid-2">
+    <div class="card"><h2>Alokasi per aset (nilai pasar)</h2><div class="chart-box"><canvas id="cCryptoAlok"></canvas></div></div>
+    <div class="card"><h2>Modal vs nilai pasar per aset</h2><div class="chart-box"><canvas id="cCryptoBanding"></canvas></div></div>
+  </div>
+  <div class="card"><h2>Ringkasan crypto<span class="spacer"></span><button class="btn sm" data-go="crypto">Ubah data</button></h2>
+    ${d.cryptoPerAset.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Simbol</th><th>Nama Aset</th><th class="num">Jumlah</th><th class="num">Modal (Rp)</th><th class="num">Nilai Pasar (Rp)</th><th class="num">Untung/Rugi (Rp)</th><th class="num">Return</th><th class="num">Alokasi</th></tr></thead>
+      <tbody>${d.cryptoPerAset.map((c, i) => `<tr><td><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span><b>${esc(c.label)}</b></td><td>${esc(c.nama)}</td>
+        <td class="num">${rp(c.jumlah)}</td><td class="num">${rp(c.modal)}</td><td class="num">${rp(c.total)}</td>
+        <td class="num ${c.laba < 0 ? 'neg' : 'pos'}">${c.laba >= 0 ? '+' : ''}${rp(c.laba)}</td><td class="num ${c.laba < 0 ? 'neg' : 'pos'}">${pct(c.persen)}</td>
+        <td class="num">${pct(r.totalCrypto ? c.total / r.totalCrypto * 100 : 0)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3">Total</td><td class="num">${rp(r.modalCrypto)}</td><td class="num">${rp(r.totalCrypto)}</td>
+        <td class="num ${r.labaCrypto < 0 ? 'neg' : 'pos'}">${r.labaCrypto >= 0 ? '+' : ''}${rp(r.labaCrypto)}</td><td class="num">${pct(r.persenCrypto)}</td><td class="num">100%</td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data crypto.</div>'}
   </div>`;
 
   $$('[data-go]', v).forEach((b) => b.onclick = () => { state.view = b.dataset.go; render(); });
@@ -270,6 +289,13 @@ VIEWS.dashboard = async (v) => {
   else chart($('#cSahamBanding'), 'bar', d.sahamPerEmiten.map((s) => s.label), [
     { label: 'Modal', data: d.sahamPerEmiten.map((s) => s.modal), backgroundColor: '#b9c4bd', borderRadius: 4 },
     { label: 'Nilai pasar', data: d.sahamPerEmiten.map((s) => s.total), backgroundColor: PALETTE[0], borderRadius: 4 },
+  ], { legend: true });
+
+  draw('cCryptoAlok', 'doughnut', d.cryptoPerAset);
+  if (!d.cryptoPerAset.length) emptyChart($('#cCryptoBanding'));
+  else chart($('#cCryptoBanding'), 'bar', d.cryptoPerAset.map((c) => c.label), [
+    { label: 'Modal', data: d.cryptoPerAset.map((c) => c.modal), backgroundColor: '#b9c4bd', borderRadius: 4 },
+    { label: 'Nilai pasar', data: d.cryptoPerAset.map((c) => c.total), backgroundColor: PALETTE[0], borderRadius: 4 },
   ], { legend: true });
 };
 
@@ -330,6 +356,65 @@ VIEWS.saham = async (v) => {
   $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('saham ini', () => api('/api/saham/' + b.dataset.del, { method: 'DELETE' })));
 };
 
+// ---------- Crypto ----------
+const CRYPTO_TOKENS = ['Bitcoin (BTC)', 'Ethereum (ETH)', 'BNB (BNB)', 'Solana (SOL)', 'XRP (XRP)', 'Cardano (ADA)',
+  'Dogecoin (DOGE)', 'Polkadot (DOT)', 'Polygon (MATIC)', 'Avalanche (AVAX)', 'Chainlink (LINK)', 'Uniswap (UNI)',
+  'Litecoin (LTC)', 'Toncoin (TON)', 'Tron (TRX)', 'Shiba Inu (SHIB)', 'Sui (SUI)', 'Pepe (PEPE)'];
+
+VIEWS.crypto = async (v) => {
+  const rows = await api(withUser('/api/crypto'));
+  const tot = (k) => rows.reduce((a, c) => a + c[k], 0);
+  const laba = tot('nilai') - tot('modal');
+  const cls = (n) => (n < 0 ? 'neg' : 'pos');
+  const plus = (n) => (n >= 0 ? '+' : '');
+
+  v.innerHTML = `<div class="card">
+    <h2>Daftar crypto<span class="spacer"></span><button class="btn primary sm" id="addCrypto">+ Tambah crypto</button></h2>
+    <p class="hint">Modal = jumlah × harga beli; nilai pasar = jumlah × harga terkini. Ketik harga terkini langsung di tabel untuk memperbarui nilai (tersimpan otomatis).</p>
+    ${rows.length ? `<div class="table-wrap"><table class="compact">
+      <thead><tr><th>Aset</th><th>Exchange</th><th class="num">Jumlah</th>
+        <th class="num">Harga Beli (Rp)</th><th class="num" style="width:130px">Harga Terkini (Rp)</th><th class="num">Modal</th><th class="num">Nilai Pasar</th>
+        <th class="num">Untung/Rugi</th><th class="num">%</th><th></th></tr></thead>
+      <tbody>${rows.map((c) => `<tr>
+        <td><b>${esc(c.simbol)}</b><div class="hint">${esc(c.nama_aset)}</div></td><td>${esc(c.exchange || '-')}</td>
+        <td class="num">${rp(c.jumlah)}</td><td class="num">${rp(c.harga_beli)}</td>
+        <td class="num"><input class="harga-input" data-harga="${c.id}" inputmode="decimal" value="${c.harga_terkini > 0 ? rp(c.harga_terkini) : ''}" placeholder="${rp(c.harga_beli)}"></td>
+        <td class="num">${rp(c.modal)}</td><td class="num">${rp(c.nilai)}</td>
+        <td class="num ${cls(c.laba)}">${plus(c.laba)}${rp(c.laba)}</td><td class="num ${cls(c.laba)}">${pct(c.persen)}</td>
+        <td class="actions"><button class="btn sm" data-edit="${c.id}">Ubah</button><button class="btn sm danger" data-del="${c.id}">Hapus</button></td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="2">Total (${rows.length} aset)</td><td></td><td colspan="2"></td>
+        <td class="num">${rp(tot('modal'))}</td><td class="num">${rp(tot('nilai'))}</td>
+        <td class="num ${cls(laba)}">${plus(laba)}${rp(laba)}</td><td class="num ${cls(laba)}">${pct(tot('modal') ? laba / tot('modal') * 100 : 0)}</td><td></td></tr></tfoot>
+    </table></div>` : '<div class="empty">Belum ada data crypto.</div>'}
+  </div>`;
+
+  const parseNum = (s) => Number(String(s).replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
+  $$('[data-harga]', v).forEach((inp) => inp.onchange = async () => {
+    try { await api(`/api/crypto/${inp.dataset.harga}/harga`, { method: 'PATCH', body: { harga_terkini: parseNum(inp.value) } }); toast('Harga diperbarui'); render(); }
+    catch (e) { toast(e.message, true); }
+  });
+
+  const exchanges = state.master.lembaga.filter((l) => l.jenis === 'Crypto');
+  const form = (c = {}) => formModal(c.id ? 'Ubah crypto' : 'Tambah crypto', [
+    { name: 'nama_aset', label: 'Nama aset', value: c.nama_aset, required: true, list: CRYPTO_TOKENS.map((t) => t.replace(/\s*\(.*\)/, '')), placeholder: 'Bitcoin' },
+    { name: 'simbol', label: 'Simbol', value: c.simbol, required: true, placeholder: 'BTC' },
+    { name: 'exchange_id', label: 'Exchange (opsional)', type: 'select', value: c.exchange_id,
+      options: [{ value: '', label: '—' }, ...exchanges.map((l) => ({ value: l.id, label: l.nama }))] },
+    { name: 'jumlah', label: 'Jumlah', type: 'number', step: 'any', value: c.jumlah, required: true, half: true },
+    { name: 'harga_beli', label: 'Harga beli rata-rata (Rp)', type: 'number', step: '0.01', value: c.harga_beli, required: true, half: true },
+    { name: 'harga_terkini', label: 'Harga terkini (Rp)', type: 'number', step: '0.01', value: c.harga_terkini, half: true },
+    { name: 'catatan', label: 'Catatan', value: c.catatan },
+  ], async (d) => {
+    if (c.id) await api('/api/crypto/' + c.id, { method: 'PUT', body: d });
+    else await api(withUser('/api/crypto'), { method: 'POST', body: d });
+    toast('Tersimpan'); render();
+  });
+
+  $('#addCrypto').onclick = () => form();
+  $$('[data-edit]', v).forEach((b) => b.onclick = () => form(rows.find((c) => c.id === Number(b.dataset.edit))));
+  $$('[data-del]', v).forEach((b) => b.onclick = () => confirmDelete('crypto ini', () => api('/api/crypto/' + b.dataset.del, { method: 'DELETE' })));
+};
+
 // ---------- Input portofolio (tabel seperti gambar 1) ----------
 VIEWS.portofolio = async (v) => {
   const rows = await api(withUser('/api/portofolio'));
@@ -340,8 +425,9 @@ VIEWS.portofolio = async (v) => {
     (l) => (l.singkatan && l.singkatan !== l.nama ? `${l.nama} (${l.singkatan})` : l.nama));
 
   const rowHtml = (p = {}) => `<tr data-id="${p.id || ''}">
-    <td><select class="f-jenis">${opt(jenis.filter((j) => j.nama !== 'Saham' || j.id === p.jenis_id), p.jenis_id)}</select></td>
+    <td><select class="f-jenis">${opt(jenis.filter((j) => !['Saham', 'Crypto'].includes(j.nama) || j.id === p.jenis_id), p.jenis_id)}</select></td>
     <td><select class="f-lembaga">${p.jenis_id ? lembagaOpt(p.jenis_id, p.lembaga_id) : '<option value="">— pilih jenis dulu —</option>'}</select></td>
+    <td><input class="f-rekening" value="${esc(p.nama_rekening || '')}" placeholder="Rek. utama, kantong, dll."></td>
     <td><select class="f-simpan">${opt(penyimpanan, p.penyimpanan_id)}</select></td>
     <td><input class="nilai f-nilai" inputmode="decimal" value="${p.id ? rp(p.nilai) : ''}" placeholder="0"></td>
     <td><input class="f-catatan" value="${esc(p.catatan || '')}" placeholder="Catatan"></td>
@@ -350,11 +436,11 @@ VIEWS.portofolio = async (v) => {
 
   v.innerHTML = `<div class="card">
     <h2>Aset per instrumen<span class="spacer"></span><button class="btn primary sm" id="addRow">+ Tambah baris</button></h2>
-    <p class="hint">Isi seperti spreadsheet: pilih jenis → nama → instrumen penyimpanan, lalu ketik nilainya. Baris yang diubah ditandai kuning dan tersimpan otomatis saat Anda pindah kolom. Obligasi dan saham dicatat di menu <b>Obligasi</b> dan <b>Saham</b> agar tidak terhitung dua kali.</p>
+    <p class="hint">Isi seperti spreadsheet: pilih jenis → nama → rekening/kantong → penyimpanan, lalu ketik nilainya. Baris yang diubah ditandai kuning dan tersimpan otomatis saat Anda pindah kolom. Obligasi, saham, dan crypto dicatat di menu masing-masing agar tidak terhitung dua kali.</p>
     <div class="table-wrap"><table class="sheet">
-      <thead><tr><th style="width:17%">Jenis Instrumen Keuangan</th><th style="width:25%">Nama Instrumen Keuangan</th><th style="width:19%">Instrumen Investasi / Penyimpanan</th><th style="width:15%" class="num">Nilai (Rp)</th><th>Catatan</th><th></th></tr></thead>
+      <thead><tr><th style="width:14%">Jenis</th><th style="width:18%">Nama</th><th style="width:14%">Rekening / Kantong</th><th style="width:15%">Penyimpanan</th><th style="width:13%" class="num">Nilai (Rp)</th><th>Catatan</th><th></th></tr></thead>
       <tbody id="sheetBody">${rows.map(rowHtml).join('')}</tbody>
-      <tfoot><tr><td colspan="3">Total</td><td class="num" id="sheetTotal"></td><td colspan="2"></td></tr></tfoot>
+      <tfoot><tr><td colspan="4">Total</td><td class="num" id="sheetTotal"></td><td colspan="2"></td></tr></tfoot>
     </table></div>
   </div>`;
 
@@ -365,8 +451,8 @@ VIEWS.portofolio = async (v) => {
 
   async function save(tr) {
     const d = {
-      jenis_id: $('.f-jenis', tr).value, lembaga_id: $('.f-lembaga', tr).value, penyimpanan_id: $('.f-simpan', tr).value,
-      nilai: parseNum($('.f-nilai', tr).value), catatan: $('.f-catatan', tr).value,
+      jenis_id: $('.f-jenis', tr).value, lembaga_id: $('.f-lembaga', tr).value, nama_rekening: $('.f-rekening', tr).value,
+      penyimpanan_id: $('.f-simpan', tr).value, nilai: parseNum($('.f-nilai', tr).value), catatan: $('.f-catatan', tr).value,
     };
     if (!d.jenis_id || !d.lembaga_id || !d.penyimpanan_id) { if (tr.dataset.id) toast('Lengkapi jenis, nama, dan instrumen', true); return; }
     try {
