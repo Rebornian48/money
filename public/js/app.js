@@ -571,6 +571,12 @@ VIEWS.aruskas = async (v) => {
     <div class="card kpi"><div class="label">Sisa (${sisa >= 0 ? 'Surplus' : 'Defisit'})</div><div class="value ${sisa >= 0 ? 'pos' : 'neg'}">${rupiah(sisa)}</div><div class="sub">${totalPendapatanBulanan ? pct(sisa / totalPendapatanBulanan * 100) + ' dari pendapatan' : '-'}</div></div>
   </div>
 
+  <div class="grid-3">
+    <div class="card"><h2>Pendapatan vs Pengeluaran</h2><div class="chart-box"><canvas id="cArusBar"></canvas></div></div>
+    <div class="card"><h2>Komposisi Pendapatan</h2><div class="chart-box"><canvas id="cPendapatan"></canvas></div></div>
+    <div class="card"><h2>Pengeluaran per Kategori</h2><div class="chart-box"><canvas id="cKategori"></canvas></div></div>
+  </div>
+
   <div class="card">
     <h2>Tanggal Pertama Gajian</h2>
     <div class="toolbar">
@@ -687,6 +693,34 @@ VIEWS.aruskas = async (v) => {
     else await api(withUser('/api/pengeluaran'), { method: 'POST', body: d });
     toast('Tersimpan'); render();
   });
+
+  // --- Grafik ---
+  // 1. Bar: Pendapatan vs Pengeluaran vs Surplus
+  const barLabels = ['Gaji Netto', 'Kupon Obligasi', 'Total Pendapatan', 'Pengeluaran', sisa >= 0 ? 'Surplus' : 'Defisit'];
+  const barData = [gajiNetto, kuponBulanan, totalPendapatanBulanan, totalPengeluaran, sisa];
+  const barColors = [PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3], sisa >= 0 ? PALETTE[0] : '#b4372f'];
+  if (bulanKerja > 0) {
+    barLabels.push('Est. Pengeluaran Riil');
+    barData.push(estimasiPengeluaranRiil > 0 ? estimasiPengeluaranRiil : 0);
+    barColors.push(PALETTE[5]);
+  }
+  chart($('#cArusBar'), 'bar', barLabels, [{ data: barData, backgroundColor: barColors, borderRadius: 4 }]);
+
+  // 2. Doughnut: Komposisi pendapatan
+  const pendapatanParts = [];
+  if (gajiPokok > 0) pendapatanParts.push({ label: 'Gaji Pokok', total: gajiPokok });
+  if (tukin > 0) pendapatanParts.push({ label: 'Tunj. Kinerja', total: tukin });
+  if (tunjab > 0) pendapatanParts.push({ label: 'Tunj. Jabatan', total: tunjab });
+  if (kuponBulanan > 0) pendapatanParts.push({ label: 'Kupon Obligasi', total: kuponBulanan });
+  if (potGaji > 0) pendapatanParts.push({ label: 'Potongan', total: potGaji });
+  if (pendapatanParts.length) {
+    chart($('#cPendapatan'), 'doughnut', pendapatanParts.map((p) => p.label), pendapatanParts.map((p) => p.total));
+  } else { emptyChart($('#cPendapatan')); }
+
+  // 3. Doughnut: Pengeluaran per kategori
+  if (perKategori.length) {
+    chart($('#cKategori'), 'doughnut', perKategori.map((k) => k.kategori), perKategori.map((k) => k.total));
+  } else { emptyChart($('#cKategori'), 'Belum ada data pengeluaran'); }
 
   $('#saveTglGaji').onclick = async () => {
     try {
