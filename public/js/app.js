@@ -131,6 +131,7 @@ async function render() {
   try {
     await loadMaster();
     await VIEWS[state.view](v);
+    $$('[data-dt]', v).forEach(el => dataTable(el));
   } catch (e) { v.innerHTML = `<div class="card error">${esc(e.message)}</div>`; }
 }
 
@@ -168,7 +169,7 @@ function emptyChart(el, msg = 'Belum ada data') { el.parentElement.innerHTML = `
 
 function summaryTable(rows, total, label) {
   if (!rows.length) return '<div class="empty">Belum ada data</div>';
-  return `<div class="table-wrap"><table>
+  return `<div class="table-wrap summary"><table>
     <thead><tr><th>${label}</th><th class="num">Nilai (Rp)</th><th class="num">%</th></tr></thead>
     <tbody>${rows.map((r, i) => `<tr>
       <td class="bar-cell"><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(r.label)}
@@ -176,6 +177,74 @@ function summaryTable(rows, total, label) {
       <td class="num">${rp(r.total)}</td><td class="num">${pct(r.total / total * 100)}</td></tr>`).join('')}</tbody>
     <tfoot><tr><td>Total</td><td class="num">${rp(total)}</td><td class="num">100%</td></tr></tfoot>
   </table></div>`;
+}
+
+// ================= DataTable (search + pagination) =================
+function dataTable(el) {
+  const table = el.querySelector('table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+  const rows = () => [...tbody.children];
+  if (!rows().length) return;
+
+  const sizes = [10, 25, 50];
+  let pg = 1, sz = sizes[0], q = '';
+
+  const top = document.createElement('div');
+  top.className = 'dt-bar';
+  top.innerHTML = `<label class="dt-size">Tampilkan <select>${sizes.map(n => `<option value="${n}">${n}</option>`).join('')}<option value="0">Semua</option></select> data</label><input class="dt-search" placeholder="Cari…">`;
+
+  const bot = document.createElement('div');
+  bot.className = 'dt-bar dt-bot';
+  bot.innerHTML = '<span class="dt-info"></span><div class="dt-pages"></div>';
+
+  el.parentNode.insertBefore(top, el);
+  el.parentNode.insertBefore(bot, el.nextSibling);
+
+  const selSz = top.querySelector('select');
+  const inp = top.querySelector('.dt-search');
+  const info = bot.querySelector('.dt-info');
+  const pagesEl = bot.querySelector('.dt-pages');
+
+  function draw() {
+    const all = rows();
+    const f = q ? all.filter(tr => tr.textContent.toLowerCase().includes(q)) : all;
+    const total = all.length, cnt = f.length;
+    const maxP = sz > 0 ? Math.ceil(cnt / sz) : 1;
+    if (pg > maxP) pg = maxP || 1;
+    const from = sz > 0 ? (pg - 1) * sz : 0;
+    const to = sz > 0 ? from + sz : cnt;
+
+    all.forEach(tr => (tr.style.display = 'none'));
+    f.forEach((tr, i) => (tr.style.display = i >= from && i < to ? '' : 'none'));
+
+    info.textContent = cnt === 0
+      ? (q ? 'Tidak ditemukan' : '')
+      : `Menampilkan ${from + 1}–${Math.min(to, cnt)} dari ${cnt}${cnt < total ? ` (total ${total})` : ''} data`;
+
+    if (maxP <= 1) { pagesEl.innerHTML = ''; return; }
+    const nums = new Set([1, maxP]);
+    for (let i = Math.max(1, pg - 1); i <= Math.min(maxP, pg + 1); i++) nums.add(i);
+    let h = `<button class="dt-pg" data-p="${pg - 1}" ${pg <= 1 ? 'disabled' : ''}>‹</button>`;
+    let prev = 0;
+    [...nums].sort((a, b) => a - b).forEach(n => {
+      if (n - prev > 1) h += `<span class="dt-dots">…</span>`;
+      h += `<button class="dt-pg${n === pg ? ' active' : ''}" data-p="${n}">${n}</button>`;
+      prev = n;
+    });
+    h += `<button class="dt-pg" data-p="${pg + 1}" ${pg >= maxP ? 'disabled' : ''}>›</button>`;
+    pagesEl.innerHTML = h;
+  }
+
+  selSz.onchange = () => { sz = +selSz.value; pg = 1; draw(); };
+  inp.oninput = () => { q = inp.value.toLowerCase(); pg = 1; draw(); };
+  pagesEl.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-p]');
+    if (b && !b.disabled) { pg = +b.dataset.p; draw(); }
+  });
+
+  draw();
 }
 
 // ================= Views =================
@@ -209,7 +278,7 @@ VIEWS.dashboard = async (v) => {
   </div>
 
   <div class="card"><h2>Detail portofolio<span class="spacer"></span><button class="btn sm" data-go="portofolio">Ubah data</button></h2>
-    ${porto.length ? `<div class="table-wrap"><table>
+    ${porto.length ? `<div class="table-wrap" data-dt><table>
       <thead><tr><th>Jenis</th><th>Nama</th><th>Rekening / Kantong</th><th>Penyimpanan</th><th class="num">Nilai (Rp)</th><th class="num">%</th></tr></thead>
       <tbody>${porto.map((p) => `<tr><td>${esc(p.jenis)}</td><td>${esc(p.lembaga)}</td><td>${esc(p.nama_rekening || '-')}</td><td>${esc(p.penyimpanan)}</td>
         <td class="num">${rp(p.nilai)}</td><td class="num">${pct(r.totalPorto ? p.nilai / r.totalPorto * 100 : 0)}</td></tr>`).join('')}</tbody>
@@ -223,7 +292,7 @@ VIEWS.dashboard = async (v) => {
     <div class="card"><h2>Saldo & proyeksi keuntungan per seri</h2><div class="chart-box"><canvas id="cOblSeri"></canvas></div></div>
   </div>
   <div class="card"><h2>Ringkasan per jenis obligasi</h2>
-    ${d.oblPerJenis.length ? `<div class="table-wrap"><table>
+    ${d.oblPerJenis.length ? `<div class="table-wrap" data-dt><table>
       <thead><tr><th>Jenis Obligasi</th><th class="num">Jumlah seri</th><th class="num">Saldo (Rp)</th><th class="num">Proyeksi keuntungan (Rp)</th><th class="num">%</th></tr></thead>
       <tbody>${d.oblPerJenis.map((o, i) => `<tr><td><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(o.label)}</td>
         <td class="num">${o.jumlah}</td><td class="num">${rp(o.total)}</td><td class="num">${rp(o.proyeksi)}</td><td class="num">${pct(o.total / r.totalObl * 100)}</td></tr>`).join('')}</tbody>
@@ -237,7 +306,7 @@ VIEWS.dashboard = async (v) => {
     <div class="card"><h2>Modal vs nilai pasar per emiten</h2><div class="chart-box"><canvas id="cSahamBanding"></canvas></div></div>
   </div>
   <div class="card"><h2>Ringkasan saham<span class="spacer"></span><button class="btn sm" data-go="saham">Ubah data</button></h2>
-    ${d.sahamPerEmiten.length ? `<div class="table-wrap"><table>
+    ${d.sahamPerEmiten.length ? `<div class="table-wrap" data-dt><table>
       <thead><tr><th>Kode</th><th>Emiten</th><th class="num">Lot</th><th class="num">Modal (Rp)</th><th class="num">Nilai pasar (Rp)</th><th class="num">Untung/Rugi (Rp)</th><th class="num">Return</th><th class="num">Alokasi</th></tr></thead>
       <tbody>${d.sahamPerEmiten.map((s, i) => `<tr><td><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span><b>${esc(s.label)}</b></td><td>${esc(s.emiten)}</td>
         <td class="num">${rp(s.lot)}</td><td class="num">${rp(s.modal)}</td><td class="num">${rp(s.total)}</td>
@@ -254,7 +323,7 @@ VIEWS.dashboard = async (v) => {
     <div class="card"><h2>Modal vs nilai pasar per aset</h2><div class="chart-box"><canvas id="cCryptoBanding"></canvas></div></div>
   </div>
   <div class="card"><h2>Ringkasan crypto<span class="spacer"></span><button class="btn sm" data-go="crypto">Ubah data</button></h2>
-    ${d.cryptoPerAset.length ? `<div class="table-wrap"><table>
+    ${d.cryptoPerAset.length ? `<div class="table-wrap" data-dt><table>
       <thead><tr><th>Simbol</th><th>Nama Aset</th><th class="num">Jumlah</th><th class="num">Modal (Rp)</th><th class="num">Nilai Pasar (Rp)</th><th class="num">Untung/Rugi (Rp)</th><th class="num">Return</th><th class="num">Alokasi</th></tr></thead>
       <tbody>${d.cryptoPerAset.map((c, i) => `<tr><td><span class="dot" style="background:${PALETTE[i % PALETTE.length]}"></span><b>${esc(c.label)}</b></td><td>${esc(c.nama)}</td>
         <td class="num">${rp(c.jumlah)}</td><td class="num">${rp(c.modal)}</td><td class="num">${rp(c.total)}</td>
@@ -310,7 +379,7 @@ VIEWS.saham = async (v) => {
   v.innerHTML = `<div class="card">
     <h2>Daftar saham<span class="spacer"></span><button class="btn primary sm" id="addSaham">+ Tambah saham</button></h2>
     <p class="hint">1 lot = 100 lembar. Modal = lot × 100 × harga beli; nilai pasar = lot × 100 × harga terkini. Ketik harga terkini langsung di tabel untuk memperbarui nilai (tersimpan otomatis).</p>
-    ${rows.length ? `<div class="table-wrap"><table class="compact">
+    ${rows.length ? `<div class="table-wrap" data-dt><table class="compact">
       <thead><tr><th>Kode / Emiten</th><th>Sekuritas</th><th>Tanggal Beli</th><th class="num">Lot</th><th class="num">Lembar</th>
         <th class="num">Harga Beli</th><th class="num" style="width:120px">Harga Terkini</th><th class="num">Modal</th><th class="num">Nilai Pasar</th>
         <th class="num">Untung/Rugi</th><th class="num">%</th><th></th></tr></thead>
@@ -371,7 +440,7 @@ VIEWS.crypto = async (v) => {
   v.innerHTML = `<div class="card">
     <h2>Daftar crypto<span class="spacer"></span><button class="btn primary sm" id="addCrypto">+ Tambah crypto</button></h2>
     <p class="hint">Modal = jumlah × harga beli; nilai pasar = jumlah × harga terkini. Ketik harga terkini langsung di tabel untuk memperbarui nilai (tersimpan otomatis).</p>
-    ${rows.length ? `<div class="table-wrap"><table class="compact">
+    ${rows.length ? `<div class="table-wrap" data-dt><table class="compact">
       <thead><tr><th>Aset</th><th>Exchange</th><th class="num">Jumlah</th>
         <th class="num">Harga Beli (Rp)</th><th class="num" style="width:130px">Harga Terkini (Rp)</th><th class="num">Modal</th><th class="num">Nilai Pasar</th>
         <th class="num">Untung/Rugi</th><th class="num">%</th><th></th></tr></thead>
@@ -424,7 +493,10 @@ const tglPanjang = (s) => {
 };
 
 VIEWS.gaji = async (v) => {
-  const rows = await api(withUser('/api/gaji'));
+  const [rows, pengaturan] = await Promise.all([
+    api(withUser('/api/gaji')),
+    api(withUser('/api/pengaturan')),
+  ]);
   const latest = rows.length ? rows[rows.length - 1] : null;
 
   let slipHtml = '<div class="card"><h2>Slip Gaji Bulanan</h2><div class="empty">Belum ada data riwayat gaji. Tambahkan riwayat di bawah.</div></div>';
@@ -466,11 +538,57 @@ VIEWS.gaji = async (v) => {
     </div>`;
   }
 
+  // Tabel perhitungan gaji per bulan
+  const tglGaji = pengaturan.tanggal_pertama_gaji;
+  let hitungHtml = '';
+  if (tglGaji && rows.length) {
+    const sorted = [...rows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    const mulai = new Date(tglGaji + 'T00:00:00');
+    const now = new Date();
+    const bulanList = [];
+    let kumulatif = 0;
+    let cur = new Date(mulai.getFullYear(), mulai.getMonth(), 1);
+    while (cur <= now) {
+      const y = cur.getFullYear();
+      const m = cur.getMonth();
+      const curYM = `${y}-${String(m + 1).padStart(2, '0')}`;
+      let ap = null;
+      for (const r of sorted) { if (r.tanggal.slice(0, 7) <= curYM) ap = r; }
+      if (ap) {
+        const gp = ap.gaji_pokok, tk = ap.tunjangan_kinerja, tj = ap.tunjangan_jabatan;
+        const bruto = gp + tk + tj;
+        const pot = Math.round(gp * 0.01) + Math.round(gp * 0.08) + Math.round(gp * 0.025);
+        const netto = bruto - pot;
+        kumulatif += netto;
+        bulanList.push({ bulan: `${BULAN[m]} ${y}`, gp, tk, tj, bruto, pot, netto, kumulatif });
+      }
+      cur.setMonth(cur.getMonth() + 1);
+    }
+    if (bulanList.length) {
+      const totalNetto = bulanList.reduce((a, b) => a + b.netto, 0);
+      hitungHtml = `<div class="card">
+        <h2>Perhitungan Gaji Per Bulan</h2>
+        <p class="hint">Perhitungan gaji netto per bulan sejak ${tglPanjang(tglGaji)}. Potongan: BPJS 1% + Taspen 8% + Tapera 2,5% dari gaji pokok.</p>
+        <div class="table-wrap" data-dt><table class="compact">
+          <thead><tr><th>No</th><th>Bulan</th><th class="num">Gaji Pokok</th><th class="num">Tunj. Kinerja</th><th class="num">Tunj. Jabatan</th><th class="num">Bruto</th><th class="num">Potongan</th><th class="num">Netto</th><th class="num">Kumulatif</th></tr></thead>
+          <tbody>${bulanList.map((b, i) => `<tr>
+            <td>${i + 1}</td><td style="white-space:nowrap">${b.bulan}</td>
+            <td class="num">${rp(b.gp)}</td><td class="num">${rp(b.tk)}</td><td class="num">${rp(b.tj)}</td>
+            <td class="num">${rp(b.bruto)}</td><td class="num">${rp(b.pot)}</td><td class="num"><b>${rp(b.netto)}</b></td><td class="num">${rp(b.kumulatif)}</td>
+          </tr>`).join('')}</tbody>
+          <tfoot><tr><td colspan="7"><b>Total (${bulanList.length} bulan)</b></td><td class="num"><b>${rp(totalNetto)}</b></td><td class="num"><b>${rp(kumulatif)}</b></td></tr></tfoot>
+        </table></div>
+      </div>`;
+    }
+  } else if (!tglGaji && rows.length) {
+    hitungHtml = '<div class="card"><h2>Perhitungan Gaji Per Bulan</h2><p class="hint">Isi tanggal pertama gajian di menu <b>Arus Kas</b> untuk melihat perhitungan gaji per bulan.</p></div>';
+  }
+
   v.innerHTML = `${slipHtml}
   <div class="card">
     <h2>Riwayat Gaji & Karir<span class="spacer"></span><button class="btn primary sm" id="addGaji">+ Tambah</button></h2>
     <p class="hint">Catat setiap perubahan gaji: kenaikan berkala, penyesuaian, kenaikan pangkat, dll.</p>
-    ${rows.length ? `<div class="table-wrap"><table class="compact">
+    ${rows.length ? `<div class="table-wrap" data-dt><table class="compact">
       <thead><tr><th>No</th><th>Tanggal</th><th>Status</th><th>Dokumen / Keterangan</th>
         <th class="num">Gaji Pokok</th><th class="num">Tunj. Kinerja</th><th class="num">Tunj. Jabatan</th><th></th></tr></thead>
       <tbody>${rows.map((r, i) => `<tr>
@@ -479,7 +597,8 @@ VIEWS.gaji = async (v) => {
         <td class="actions"><button class="btn sm" data-edit="${r.id}">Ubah</button><button class="btn sm danger" data-del="${r.id}">Hapus</button></td>
       </tr>`).join('')}</tbody>
     </table></div>` : '<div class="empty">Belum ada data riwayat gaji.</div>'}
-  </div>`;
+  </div>
+  ${hitungHtml}`;
 
   const form = (r = {}) => formModal(r.id ? 'Ubah riwayat' : 'Tambah riwayat', [
     { name: 'tanggal', label: 'Tanggal', type: 'date', value: r.tanggal, required: true, half: true },
@@ -569,6 +688,8 @@ VIEWS.aruskas = async (v) => {
     <div class="card kpi"><div class="label">Pendapatan / Bulan</div><div class="value">${rupiah(totalPendapatanBulanan)}</div><div class="sub">Gaji netto + kupon obligasi</div></div>
     <div class="card kpi"><div class="label">Pengeluaran / Bulan</div><div class="value">${rupiah(totalPengeluaran)}</div><div class="sub">${pengeluaranRows.length} pos pengeluaran</div></div>
     <div class="card kpi"><div class="label">Sisa (${sisa >= 0 ? 'Surplus' : 'Defisit'})</div><div class="value ${sisa >= 0 ? 'pos' : 'neg'}">${rupiah(sisa)}</div><div class="sub">${totalPendapatanBulanan ? pct(sisa / totalPendapatanBulanan * 100) + ' dari pendapatan' : '-'}</div></div>
+    ${bulanKerja > 0 ? `<div class="card kpi"><div class="label">Est. Pengeluaran Riil / Bulan</div><div class="value">${rupiah(estimasiPengeluaranRiil)}</div><div class="sub">Pendapatan ${rupiah(totalPendapatanBulanan)} − pertumbuhan aset ${rupiah(pertumbuhanAsetPerBulan)}</div></div>
+    <div class="card kpi"><div class="label">Est. Pengeluaran Riil Total</div><div class="value">${rupiah(estimasiPengeluaranRiil * bulanKerja)}</div><div class="sub">${rupiah(estimasiPengeluaranRiil)} × ${bulanKerja} bulan kerja</div></div>` : ''}
   </div>
 
   <div class="grid-3">
@@ -661,7 +782,7 @@ VIEWS.aruskas = async (v) => {
         </tfoot>
       </table></div>
       ${perKategori.length ? `<h2 style="margin-top:20px">Per Kategori</h2>
-      <div class="table-wrap"><table class="compact">
+      <div class="table-wrap" data-dt><table class="compact">
         <thead><tr><th>Kategori</th><th class="num">Jumlah</th><th class="num">%</th></tr></thead>
         <tbody>${perKategori.map((k) => `<tr><td>${esc(k.kategori)}</td><td class="num">${rupiah(k.total)}</td>
           <td class="num">${pct(totalPengeluaran ? k.total / totalPengeluaran * 100 : 0)}</td></tr>`).join('')}</tbody>
@@ -672,7 +793,7 @@ VIEWS.aruskas = async (v) => {
   <div class="card">
     <h2>Pengeluaran Bulanan<span class="spacer"></span><button class="btn primary sm" id="addKeluar">+ Tambah</button></h2>
     <p class="hint">Catat estimasi pengeluaran rutin bulanan. Total dipakai untuk menghitung sisa pendapatan.</p>
-    ${pengeluaranRows.length ? `<div class="table-wrap"><table class="compact">
+    ${pengeluaranRows.length ? `<div class="table-wrap" data-dt><table class="compact">
       <thead><tr><th>Kategori</th><th>Nama</th><th class="num">Jumlah (Rp)</th><th>Catatan</th><th></th></tr></thead>
       <tbody>${pengeluaranRows.map((r) => `<tr>
         <td>${esc(r.kategori)}</td><td>${esc(r.nama)}</td><td class="num">${rp(r.jumlah)}</td><td>${esc(r.catatan || '')}</td>
@@ -817,7 +938,7 @@ VIEWS.obligasi = async (v) => {
       <select id="oblFilter" style="width:auto;margin:0"><option value="semua">Semua</option><option value="Aktif">Aktif</option><option value="Jatuh tempo">Jatuh tempo</option></select>
       <button class="btn primary sm" id="addObl">+ Tambah obligasi</button></h2>
     <p class="hint">Total proyeksi keuntungan = saldo awal × keuntungan per tahun × tahun. Tahun diambil dari tenor pada kode (mis. SR019-<b>T5</b> → 5 tahun).</p>
-    ${list.length ? `<div class="table-wrap"><table class="compact">
+    ${list.length ? `<div class="table-wrap" data-dt><table class="compact">
       <thead><tr><th>Jenis Obligasi</th><th>Kode Obligasi</th><th>Cair Pertama</th><th>Cair Terakhir</th><th class="num">Saldo Awal</th>
         <th class="num">Keuntungan per tahun (%)</th><th class="num">Total Proyeksi Keuntungan</th><th class="num">Tahun</th><th>Status</th><th></th></tr></thead>
       <tbody>${list.map((o) => `<tr>
@@ -860,29 +981,22 @@ function masterView(t, cols, fields, extra = {}) {
     let rows = state.master[t];
     const admin = isAdmin();
     const filter = extra.filter ? (state.filters?.[t] || '') : '';
-    const q = (state.search?.[t] || '').toLowerCase();
     if (filter) rows = rows.filter((r) => String(r.jenis_id) === filter);
-    if (q) rows = rows.filter((r) => cols.some((c) => String(r[c.key] ?? '').toLowerCase().includes(q)));
 
     v.innerHTML = `<div class="card">
       <h2>${TITLES[t]} <span class="badge">${rows.length}</span><span class="spacer"></span>
         ${admin ? '<button class="btn primary sm" id="addM">+ Tambah</button>' : ''}</h2>
       <div class="toolbar" style="margin-bottom:12px">
         ${extra.filter ? `<select id="fJenis"><option value="">Semua jenis</option>${state.master.jenis.map((j) => `<option value="${j.id}" ${String(j.id) === filter ? 'selected' : ''}>${esc(j.nama)}</option>`).join('')}</select>` : ''}
-        <input id="fCari" placeholder="Cari…" value="${esc(state.search?.[t] || '')}" style="max-width:240px">
         ${admin ? '' : '<span class="hint">Hanya admin yang dapat mengubah tabel master.</span>'}
       </div>
-      ${rows.length ? `<div class="table-wrap"><table>
+      ${rows.length ? `<div class="table-wrap" data-dt><table>
         <thead><tr><th>#</th>${cols.map((c) => `<th>${c.label}</th>`).join('')}${admin ? '<th></th>' : ''}</tr></thead>
         <tbody>${rows.map((r, i) => `<tr><td class="muted">${i + 1}</td>${cols.map((c) => `<td>${esc(r[c.key])}</td>`).join('')}
           ${admin ? `<td class="actions"><button class="btn sm" data-edit="${r.id}">Ubah</button><button class="btn sm danger" data-del="${r.id}">Hapus</button></td>` : ''}</tr>`).join('')}</tbody>
       </table></div>` : '<div class="empty">Tidak ada data.</div>'}
     </div>`;
 
-    $('#fCari').oninput = (e) => {
-      state.search = { ...state.search, [t]: e.target.value };
-      clearTimeout(state._s); state._s = setTimeout(() => { render().then(() => { const el = $('#fCari'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }); }, 250);
-    };
     if (extra.filter) $('#fJenis').onchange = (e) => { state.filters = { ...state.filters, [t]: e.target.value }; render(); };
     if (!admin) return;
 
@@ -918,7 +1032,7 @@ VIEWS.users = async (v) => {
   const users = await api('/api/users');
   v.innerHTML = `<div class="card">
     <h2>Pengguna <span class="badge">${users.length}</span><span class="spacer"></span><button class="btn primary sm" id="addU">+ Tambah pengguna</button></h2>
-    <div class="table-wrap"><table>
+    <div class="table-wrap" data-dt><table>
       <thead><tr><th>Nama pengguna</th><th>Nama lengkap</th><th>Peran</th><th>Dibuat</th><th></th></tr></thead>
       <tbody>${users.map((u) => `<tr><td><b>${esc(u.username)}</b></td><td>${esc(u.nama_lengkap)}</td>
         <td><span class="badge ${u.role === 'admin' ? 'warn' : ''}">${u.role}</span></td><td class="muted">${esc(u.created_at.slice(0, 10))}</td>
