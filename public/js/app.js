@@ -485,6 +485,48 @@ VIEWS.crypto = async (v) => {
 };
 
 // ---------- Gaji PNS ----------
+// Bulan THR (0-indexed): perkiraan bulan pencairan berdasarkan Idul Fitri
+const BULAN_THR = { 2023: 3, 2024: 3, 2025: 2, 2026: 2, 2027: 2, 2028: 1, 2029: 1, 2030: 0, 2031: 0, 2032: 11, 2033: 11, 2034: 10, 2035: 10 };
+const BULAN_GAJI13 = 5; // Juni
+
+function hitungGajiBulanan(gajiRows, tglGaji) {
+  if (!tglGaji || !gajiRows.length) return [];
+  const sorted = [...gajiRows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+  const mulai = new Date(tglGaji + 'T00:00:00');
+  const now = new Date();
+  const result = [];
+  let kumulatif = 0;
+  let cur = new Date(mulai.getFullYear(), mulai.getMonth(), 1);
+  while (cur <= now) {
+    const y = cur.getFullYear();
+    const m = cur.getMonth();
+    const curYM = `${y}-${String(m + 1).padStart(2, '0')}`;
+    let ap = null;
+    for (const r of sorted) { if (r.tanggal.slice(0, 7) <= curYM) ap = r; }
+    if (ap) {
+      const gp = ap.gaji_pokok, tk = ap.tunjangan_kinerja, tj = ap.tunjangan_jabatan;
+      const bruto = gp + tk + tj;
+      const pot = Math.round(gp * 0.01) + Math.round(gp * 0.08) + Math.round(gp * 0.025);
+      const netto = bruto - pot;
+      kumulatif += netto;
+      result.push({ bulan: `${BULAN[m]} ${y}`, gp, tk, tj, bruto, pot, netto, kumulatif, ket: '' });
+      // Gaji ke-13 (Juni)
+      if (m === BULAN_GAJI13) {
+        kumulatif += netto;
+        result.push({ bulan: `${BULAN[m]} ${y}`, gp, tk, tj, bruto, pot, netto, kumulatif, ket: 'Gaji ke-13' });
+      }
+      // THR (bulan sesuai Idul Fitri)
+      const thrM = BULAN_THR[y];
+      if (thrM !== undefined && m === thrM) {
+        kumulatif += netto;
+        result.push({ bulan: `${BULAN[m]} ${y}`, gp, tk, tj, bruto, pot, netto, kumulatif, ket: 'THR' });
+      }
+    }
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return result;
+}
+
 const tglPanjang = (s) => {
   if (!s) return '-';
   const d = new Date(s + 'T00:00:00');
@@ -541,45 +583,27 @@ VIEWS.gaji = async (v) => {
   // Tabel perhitungan gaji per bulan
   const tglGaji = pengaturan.tanggal_pertama_gaji;
   let hitungHtml = '';
-  if (tglGaji && rows.length) {
-    const sorted = [...rows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
-    const mulai = new Date(tglGaji + 'T00:00:00');
-    const now = new Date();
-    const bulanList = [];
-    let kumulatif = 0;
-    let cur = new Date(mulai.getFullYear(), mulai.getMonth(), 1);
-    while (cur <= now) {
-      const y = cur.getFullYear();
-      const m = cur.getMonth();
-      const curYM = `${y}-${String(m + 1).padStart(2, '0')}`;
-      let ap = null;
-      for (const r of sorted) { if (r.tanggal.slice(0, 7) <= curYM) ap = r; }
-      if (ap) {
-        const gp = ap.gaji_pokok, tk = ap.tunjangan_kinerja, tj = ap.tunjangan_jabatan;
-        const bruto = gp + tk + tj;
-        const pot = Math.round(gp * 0.01) + Math.round(gp * 0.08) + Math.round(gp * 0.025);
-        const netto = bruto - pot;
-        kumulatif += netto;
-        bulanList.push({ bulan: `${BULAN[m]} ${y}`, gp, tk, tj, bruto, pot, netto, kumulatif });
-      }
-      cur.setMonth(cur.getMonth() + 1);
-    }
-    if (bulanList.length) {
-      const totalNetto = bulanList.reduce((a, b) => a + b.netto, 0);
-      hitungHtml = `<div class="card">
-        <h2>Perhitungan Gaji Per Bulan</h2>
-        <p class="hint">Perhitungan gaji netto per bulan sejak ${tglPanjang(tglGaji)}. Potongan: BPJS 1% + Taspen 8% + Tapera 2,5% dari gaji pokok.</p>
-        <div class="table-wrap" data-dt><table class="compact">
-          <thead><tr><th>No</th><th>Bulan</th><th class="num">Gaji Pokok</th><th class="num">Tunj. Kinerja</th><th class="num">Tunj. Jabatan</th><th class="num">Bruto</th><th class="num">Potongan</th><th class="num">Netto</th><th class="num">Kumulatif</th></tr></thead>
-          <tbody>${bulanList.map((b, i) => `<tr>
-            <td>${i + 1}</td><td style="white-space:nowrap">${b.bulan}</td>
-            <td class="num">${rp(b.gp)}</td><td class="num">${rp(b.tk)}</td><td class="num">${rp(b.tj)}</td>
-            <td class="num">${rp(b.bruto)}</td><td class="num">${rp(b.pot)}</td><td class="num"><b>${rp(b.netto)}</b></td><td class="num">${rp(b.kumulatif)}</td>
-          </tr>`).join('')}</tbody>
-          <tfoot><tr><td colspan="7"><b>Total (${bulanList.length} bulan)</b></td><td class="num"><b>${rp(totalNetto)}</b></td><td class="num"><b>${rp(kumulatif)}</b></td></tr></tfoot>
-        </table></div>
-      </div>`;
-    }
+  const bulanList = hitungGajiBulanan(rows, tglGaji);
+  if (bulanList.length) {
+    const totalNetto = bulanList.reduce((a, b) => a + b.netto, 0);
+    const kumulatif = bulanList[bulanList.length - 1].kumulatif;
+    const jmlBulan = bulanList.filter(b => !b.ket).length;
+    const jmlGaji13 = bulanList.filter(b => b.ket === 'Gaji ke-13').length;
+    const jmlTHR = bulanList.filter(b => b.ket === 'THR').length;
+    const ringkasan = [`${jmlBulan} bulan`, jmlGaji13 ? `${jmlGaji13} Gaji ke-13` : '', jmlTHR ? `${jmlTHR} THR` : ''].filter(Boolean).join(' + ');
+    hitungHtml = `<div class="card">
+      <h2>Perhitungan Gaji Per Bulan</h2>
+      <p class="hint">Perhitungan gaji netto per bulan sejak ${tglPanjang(tglGaji)}. Termasuk Gaji ke-13 (Juni) dan THR (sebelum Lebaran). Potongan: BPJS 1% + Taspen 8% + Tapera 2,5% dari gaji pokok.</p>
+      <div class="table-wrap" data-dt><table class="compact">
+        <thead><tr><th>No</th><th>Bulan</th><th>Keterangan</th><th class="num">Gaji Pokok</th><th class="num">Tunj. Kinerja</th><th class="num">Tunj. Jabatan</th><th class="num">Bruto</th><th class="num">Potongan</th><th class="num">Netto</th><th class="num">Kumulatif</th></tr></thead>
+        <tbody>${bulanList.map((b, i) => `<tr${b.ket ? ' style="background:var(--brand-soft)"' : ''}>
+          <td>${i + 1}</td><td style="white-space:nowrap">${b.bulan}</td><td>${b.ket || 'Gaji Bulanan'}</td>
+          <td class="num">${rp(b.gp)}</td><td class="num">${rp(b.tk)}</td><td class="num">${rp(b.tj)}</td>
+          <td class="num">${rp(b.bruto)}</td><td class="num">${rp(b.pot)}</td><td class="num"><b>${rp(b.netto)}</b></td><td class="num">${rp(b.kumulatif)}</td>
+        </tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="8"><b>Total (${ringkasan})</b></td><td class="num"><b>${rp(totalNetto)}</b></td><td class="num"><b>${rp(kumulatif)}</b></td></tr></tfoot>
+      </table></div>
+    </div>`;
   } else if (!tglGaji && rows.length) {
     hitungHtml = '<div class="card"><h2>Perhitungan Gaji Per Bulan</h2><p class="hint">Isi tanggal pertama gajian di menu <b>Arus Kas</b> untuk melihat perhitungan gaji per bulan.</p></div>';
   }
@@ -677,26 +701,10 @@ VIEWS.aruskas = async (v) => {
     if (bulanKerja < 0) bulanKerja = 0;
 
     if (gajiRows.length) {
-      const sorted = [...gajiRows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
-      let cur = new Date(mulai.getFullYear(), mulai.getMonth(), 1);
-      let kumGaji = 0;
-      while (cur <= now) {
-        const y = cur.getFullYear();
-        const m = cur.getMonth();
-        const curYM = `${y}-${String(m + 1).padStart(2, '0')}`;
-        let ap = null;
-        for (const r of sorted) { if (r.tanggal.slice(0, 7) <= curYM) ap = r; }
-        if (ap) {
-          const gp = ap.gaji_pokok, tk = ap.tunjangan_kinerja, tj = ap.tunjangan_jabatan;
-          const bruto = gp + tk + tj;
-          const pot = Math.round(gp * 0.01) + Math.round(gp * 0.08) + Math.round(gp * 0.025);
-          kumGaji += bruto - pot;
-          bulanGajiData++;
-        }
-        cur.setMonth(cur.getMonth() + 1);
-      }
-      totalGajiKumulatif = kumGaji;
-      rataRataGajiBulanan = bulanGajiData > 0 ? Math.round(kumGaji / bulanGajiData) : gajiNetto;
+      const bl = hitungGajiBulanan(gajiRows, tglGaji);
+      totalGajiKumulatif = bl.length ? bl[bl.length - 1].kumulatif : 0;
+      bulanGajiData = bl.length;
+      rataRataGajiBulanan = bulanGajiData > 0 ? Math.round(totalGajiKumulatif / bulanGajiData) : gajiNetto;
     } else {
       totalGajiKumulatif = gajiNetto * bulanKerja;
     }
@@ -715,7 +723,7 @@ VIEWS.aruskas = async (v) => {
   v.innerHTML = `
   <div class="kpis">
     <div class="card kpi main"><div class="label">Total Aset (Acuan)</div><div class="value">${rupiah(totalAset)}</div><div class="sub">Portofolio + obligasi + saham + crypto</div></div>
-    <div class="card kpi"><div class="label">Pendapatan / Bulan</div><div class="value">${rupiah(totalPendapatanBulanan)}</div><div class="sub">${bulanGajiData > 0 ? `Rata-rata gaji ${bulanGajiData} bulan` : 'Gaji netto'} + kupon obligasi</div></div>
+    <div class="card kpi"><div class="label">Pendapatan / Bulan</div><div class="value">${rupiah(totalPendapatanBulanan)}</div><div class="sub">${bulanGajiData > 0 ? `Rata-rata ${bulanGajiData} pembayaran gaji` : 'Gaji netto'} + kupon obligasi</div></div>
     <div class="card kpi"><div class="label">Pengeluaran / Bulan</div><div class="value">${rupiah(totalPengeluaran)}</div><div class="sub">${pengeluaranRows.length} pos pengeluaran</div></div>
     <div class="card kpi"><div class="label">Sisa (${sisa >= 0 ? 'Surplus' : 'Defisit'})</div><div class="value ${sisa >= 0 ? 'pos' : 'neg'}">${rupiah(sisa)}</div><div class="sub">${totalPendapatanBulanan ? pct(sisa / totalPendapatanBulanan * 100) + ' dari pendapatan' : '-'}</div></div>
     ${bulanKerja > 0 ? `<div class="card kpi"><div class="label">Est. Pengeluaran Riil / Bulan</div><div class="value">${rupiah(estimasiPengeluaranRiil)}</div><div class="sub">Pendapatan ${rupiah(totalPendapatanBulanan)} − pertumbuhan aset ${rupiah(pertumbuhanAsetPerBulan)}</div></div>
@@ -776,7 +784,7 @@ VIEWS.aruskas = async (v) => {
           ${baris('Tunjangan Jabatan', tunjab)}
           ${baris('Potongan (BPJS + Taspen + Tapera)', -potGaji)}
           <tr class="total"><td><b>Gaji Bersih (saat ini)</b></td><td class="num"><b>${rupiah(gajiNetto)}</b></td></tr>
-          ${bulanGajiData > 0 && rataRataGajiBulanan !== gajiNetto ? `<tr><td><b>Rata-rata Gaji Bersih</b> <span class="hint">(${bulanGajiData} bulan)</span></td><td class="num"><b>${rupiah(rataRataGajiBulanan)}</b></td></tr>` : ''}`
+          ${bulanGajiData > 0 && rataRataGajiBulanan !== gajiNetto ? `<tr><td><b>Rata-rata Gaji Bersih</b> <span class="hint">(${bulanGajiData} pembayaran)</span></td><td class="num"><b>${rupiah(rataRataGajiBulanan)}</b></td></tr>` : ''}`
           : '<tr><td colspan="2" class="muted">Belum ada data gaji. Isi di menu Gaji PNS.</td></tr>'}
         </tbody>
         <thead><tr><th colspan="2" class="section-head pos">KUPON OBLIGASI</th></tr></thead>
