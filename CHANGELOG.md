@@ -7,7 +7,9 @@ Semua perubahan penting pada proyek ini didokumentasikan di file ini.
 ## 2026-10-05
 
 ### Ditambahkan
-- **Tabel Perhitungan Gaji Per Bulan**: tabel rinci gaji netto per bulan sejak tanggal pertama gajian, dengan kolom Gaji Pokok, Tunj. Kinerja, Tunj. Jabatan, Bruto, Potongan, Netto, dan Kumulatif. Dilengkapi DataTable (search + pagination).
+- **Gaji ke-13 dan THR**: otomatis dihitung di tabel perhitungan gaji — Gaji ke-13 di bulan Juni, THR sesuai bulan Idul Fitri. Termasuk dalam kumulatif dan rata-rata pendapatan di Arus Kas.
+- **Pendapatan/bulan dari rata-rata kumulatif**: pendapatan di Arus Kas sekarang dihitung dari rata-rata seluruh pembayaran gaji (termasuk Gaji ke-13 & THR), bukan dari gaji terbaru saja.
+- **Tabel Perhitungan Gaji Per Bulan**: tabel rinci gaji netto per bulan sejak tanggal pertama gajian, dengan kolom Gaji Pokok, Tunj. Kinerja, Tunj. Jabatan, Bruto, Potongan, Netto, Kumulatif, dan Keterangan. Dilengkapi DataTable (search + pagination).
 - **DataTable pada semua tabel data**: search (pencarian teks), pagination (10, 25, 50, semua data per halaman), info jumlah data yang ditampilkan. Diterapkan pada tabel: dashboard (portofolio, obligasi, saham, crypto), obligasi, saham, crypto, gaji (riwayat), arus kas (pengeluaran, per kategori), tabel master (jenis, lembaga, penyimpanan), dan pengguna.
 
 ## 2026-10-04
